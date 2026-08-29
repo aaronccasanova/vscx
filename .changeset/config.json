@@ -6,7 +6,7 @@
     [
       "@vscx/core",
       "@vscx/cli",
-      "vscx"
+      "vscode-vscx"
     ]
   ],
   "linked": [],

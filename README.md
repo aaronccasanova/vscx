@@ -119,7 +119,7 @@ Integrated terminal or agent
 
 - `@vscx/core` owns the protocol contract, transport, endpoint registry, target discovery, serialization, errors, and job lifecycle.
 - `@vscx/cli` exposes a reusable `runCli()` library and the `vscx` executable.
-- `vscx` is the VS Code extension workspace. It consumes core directly and bundles the CLI so the local VSIX is self-contained.
+- `vscode-vscx` is the VS Code extension workspace. It consumes core directly and bundles the CLI so the local VSIX is self-contained.
 
 The protocol types have no VS Code dependency and live in their own core module. They can move into a separate package later if an independent consumer needs that boundary, without changing the wire format.
 

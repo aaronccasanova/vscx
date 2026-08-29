@@ -9,8 +9,8 @@
   },
   "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "build": "pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run build && pnpm --filter vscx run build",
-    "check": "node scripts/sync-runtime-version.mjs --check && pnpm --filter @vscx/core run check && pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run check && pnpm --filter @vscx/cli run build && pnpm --filter vscx run check",
+    "build": "pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run build && pnpm --filter vscode-vscx run build",
+    "check": "node scripts/sync-runtime-version.mjs --check && pnpm --filter @vscx/core run check && pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run check && pnpm --filter @vscx/cli run build && pnpm --filter vscode-vscx run check",
     "test": "pnpm --filter @vscx/core run test && pnpm --filter @vscx/cli run test",
     "package": "node scripts/package-vscode-extension.mjs",
     "package:pre-release": "node scripts/package-vscode-extension.mjs --pre-release",

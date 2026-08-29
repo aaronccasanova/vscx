@@ -9,7 +9,11 @@ const scriptFilePath = url.fileURLToPath(import.meta.url);
 const projectRootDirPath = path.resolve(path.dirname(scriptFilePath), "..");
 const extensionDirPath = path.join(projectRootDirPath, "packages", "vscode");
 const artifactDirPath = path.join(projectRootDirPath, "artifacts");
-const placeholderPublisherNames = new Set(["", "local-vscx"]);
+const marketplaceExtensionIdentity = {
+  displayName: "VSCX Host",
+  name: "vscode-vscx",
+  publisher: "vscx",
+};
 
 function main() {
   const extensionPackageFilePath = path.join(extensionDirPath, "package.json");
@@ -19,7 +23,7 @@ function main() {
   );
   const extensionPackageConfig = JSON.parse(extensionPackageFileContent);
 
-  validateMarketplacePublisher(extensionPackageConfig.publisher);
+  validateMarketplaceExtensionIdentity(extensionPackageConfig);
   validateMarketplaceCredential(process.env.VSCE_PAT);
 
   const shouldPublishPreRelease = process.argv.includes("--pre-release");
@@ -55,16 +59,18 @@ function main() {
   );
 }
 
-function validateMarketplacePublisher(publisherName) {
+function validateMarketplaceExtensionIdentity(extensionPackageConfig) {
   if (
-    typeof publisherName === "string" &&
-    !placeholderPublisherNames.has(publisherName)
+    extensionPackageConfig.displayName ===
+      marketplaceExtensionIdentity.displayName &&
+    extensionPackageConfig.name === marketplaceExtensionIdentity.name &&
+    extensionPackageConfig.publisher === marketplaceExtensionIdentity.publisher
   ) {
     return;
   }
 
   throw new Error(
-    "Replace the placeholder VS Code Marketplace publisher in packages/vscode/package.json before publishing.",
+    `Expected the VS Code Marketplace extension identity ${marketplaceExtensionIdentity.publisher}.${marketplaceExtensionIdentity.name} with display name ${marketplaceExtensionIdentity.displayName}. Check packages/vscode/package.json before publishing.`,
   );
 }
 

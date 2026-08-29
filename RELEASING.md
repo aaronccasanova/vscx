@@ -10,11 +10,11 @@ Every pull request that changes a shipped package or the VS Code extension must 
 pnpm changeset
 ```
 
-Select every affected package and write the release-note summary. Select `vscx` when the VS Code extension changes. Its manifest sets `"private": true` only to prevent npm publication. Changesets still versions the extension and writes `packages/vscode/CHANGELOG.md` before the release script publishes its VSIX to the Marketplace.
+Select every affected package and write the release-note summary. Select `vscode-vscx` when the VS Code extension changes. Its manifest sets `"private": true` only to prevent npm publication. Changesets still versions the extension and writes `packages/vscode/CHANGELOG.md` before the release script publishes its VSIX to the Marketplace.
 
 In this guide, `public` and `private` refer only to package registry settings. They do not describe repository visibility, source availability, licensing, intended audience, or confidentiality.
 
-`@vscx/core`, `@vscx/cli`, and `vscx` are a fixed version group. Changesets advances them together so standalone clients and the bundled extension share one VSCX version.
+`@vscx/core`, `@vscx/cli`, and `vscode-vscx` are a fixed version group. Changesets advances them together so standalone clients and the bundled extension share one VSCX version.
 
 Changes that affect only tests, tooling, or documentation do not need a changeset.
 
@@ -27,7 +27,7 @@ Changes that affect only tests, tooling, or documentation do not need a changese
 
 The workflow is serialized per branch. It validates the Marketplace publisher, credential, and exact VSIX before publishing anything. If npm publishing fails, it never reaches the extension publish step. After resolving the failure, rerun the release workflow from the failed release commit. npm and Marketplace publication both skip versions that already exist, so a retry after a partial success is safe. Do not create a second release PR or manually change the generated versions.
 
-Changesets publishes `@vscx/core` and `@vscx/cli` to npm. The `vscx` package is excluded from npm and published to the VS Code Marketplace by the repository's release script.
+Changesets publishes `@vscx/core` and `@vscx/cli` to npm. The `vscode-vscx` package is excluded from npm and published to the VS Code Marketplace by the repository's release script.
 
 ## First-release rollout
 
@@ -73,7 +73,7 @@ gh api \
 
 - Confirm the npm account can publish scoped packages with `"access": "public"` under the `@vscx` scope.
 - Confirm that the `vscx` VS Code Marketplace publisher is available to the release identity.
-- Confirm that `packages/vscode/package.json` uses the verified `vscx` publisher ID.
+- Confirm that `packages/vscode/package.json` produces the Marketplace identity `vscx.vscode-vscx` with the display name `VSCX Host`.
 
 ### 2. Bootstrap the npm packages
 

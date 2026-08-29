@@ -1,8 +1,8 @@
 {
-  "name": "vscx",
+  "name": "vscode-vscx",
   "private": true,
-  "displayName": "VSCX",
-  "description": "Control the current VS Code extension host from a local CLI.",
+  "displayName": "VSCX Host",
+  "description": "Host an authenticated control plane for local tools and AI agents in VS Code.",
   "version": "0.0.1",
   "publisher": "vscx",
   "license": "MIT",
