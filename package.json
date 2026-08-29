@@ -1,0 +1,35 @@
+{
+  "name": "vscx-workspace",
+  "private": true,
+  "description": "A local control plane for the running VS Code extension host.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaronccasanova/vscx.git"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "build": "pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run build && pnpm --filter vscx run build",
+    "check": "node scripts/sync-runtime-version.mjs --check && pnpm --filter @vscx/core run check && pnpm --filter @vscx/core run build && pnpm --filter @vscx/cli run check && pnpm --filter @vscx/cli run build && pnpm --filter vscx run check",
+    "test": "pnpm --filter @vscx/core run test && pnpm --filter @vscx/cli run test",
+    "package": "node scripts/package-vscode-extension.mjs",
+    "package:pre-release": "node scripts/package-vscode-extension.mjs --pre-release",
+    "package:snapshot": "node scripts/package-vscode-extension.mjs --snapshot",
+    "package:local": "pnpm package:snapshot",
+    "install:snapshot": "node scripts/package-vscode-extension.mjs --snapshot --install",
+    "package:cli": "pnpm --filter @vscx/cli pack --pack-destination artifacts",
+    "package:core": "pnpm --filter @vscx/core pack --pack-destination artifacts",
+    "changeset": "changeset",
+    "version": "changeset version && node scripts/sync-runtime-version.mjs",
+    "release:verify": "pnpm check && pnpm test && pnpm package:pre-release",
+    "release:publish": "pnpm release:verify && pnpm release:validate && pnpm changeset publish && pnpm release:publish:vscode",
+    "release:validate": "node scripts/publish-vscode-extension.mjs --pre-release --check",
+    "release:publish:vscode": "node scripts/publish-versioned-vscode-extension.mjs --pre-release",
+    "vscx": "node packages/cli/dist/cli.js"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
