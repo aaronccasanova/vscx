@@ -1,0 +1,78 @@
+{
+  "name": "vscx",
+  "private": true,
+  "displayName": "VSCX",
+  "description": "Control the current VS Code extension host from a local CLI.",
+  "version": "0.0.1",
+  "publisher": "vscx",
+  "license": "MIT",
+  "homepage": "https://github.com/aaronccasanova/vscx#readme",
+  "bugs": {
+    "url": "https://github.com/aaronccasanova/vscx/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaronccasanova/vscx.git",
+    "directory": "packages/vscode"
+  },
+  "preview": true,
+  "icon": "media/vscx.png",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:vscx.showStatus",
+    "onCommand:vscx.openTerminal"
+  ],
+  "main": "./dist/extension.js",
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "VSCX evaluates authenticated client code in the extension host, so it is disabled until the workspace is trusted."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscx.showStatus",
+        "title": "Show bridge status",
+        "category": "VSCX"
+      },
+      {
+        "command": "vscx.openTerminal",
+        "title": "Open connected terminal",
+        "category": "VSCX"
+      }
+    ],
+    "configuration": {
+      "title": "VSCX",
+      "properties": {
+        "vscx.includeRemoteStacks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include extension-host stack traces in local RPC errors. Disabled by default because stacks can contain local paths."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-vscode-extension.mjs",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vscx/cli": "workspace:*",
+    "@vscx/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0"
+  }
+}

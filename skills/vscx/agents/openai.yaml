@@ -1,0 +1,4 @@
+interface:
+  display_name: "VSCX"
+  short_description: "Inspect and automate a live VS Code window"
+  default_prompt: "Use $vscx to inspect and automate the active VS Code window through its documented API."
