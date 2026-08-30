@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "VSCX Host",
   "description": "Host an authenticated control plane for local tools and AI agents in VS Code.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "vscx",
   "license": "MIT",
   "homepage": "https://github.com/aaronccasanova/vscx#readme",
