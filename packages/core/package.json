@@ -1,6 +1,6 @@
 {
   "name": "@vscx/core",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Protocol, transport, discovery, and runtime primitives for VSCX.",
   "license": "MIT",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@vscx/cli",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Local CLI for controlling a running VS Code extension host.",
   "license": "MIT",
   "repository": {
