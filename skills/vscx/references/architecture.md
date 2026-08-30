@@ -15,7 +15,7 @@ Integrated terminal or agent
 
 - `@vscx/core` owns protocol types, transport, discovery, the runtime registry, bounded serialization, errors, and job lifecycle. It has no VS Code dependency.
 - `@vscx/cli` wraps core discovery and RPC as `runCli()` and the `vscx` executable. It does not import or emulate VS Code.
-- The `vscx` extension owns activation, the authenticated per-window server, terminal environment injection, documented VS Code API evaluation, declarations, status UI, and the bundled CLI.
+- The `vscode-vscx` extension workspace owns activation, the authenticated per-window server, terminal environment injection, documented VS Code API evaluation, declarations, status UI, and the bundled CLI.
 
 The protocol is versioned inside core. Extract it into a separate package only when an independent consumer needs that boundary.
 
