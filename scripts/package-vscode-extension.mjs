@@ -9,26 +9,31 @@ const scriptFilePath = url.fileURLToPath(import.meta.url);
 const projectRootDirPath = path.resolve(path.dirname(scriptFilePath), "..");
 const extensionDirPath = path.join(projectRootDirPath, "packages", "vscode");
 const artifactDirPath = path.join(projectRootDirPath, "artifacts");
+const supportedArguments = new Set(["--snapshot", "--pre-release", "--install"]);
 
 function main() {
+  const packageOptions = parsePackageOptions();
+
+  if (process.platform === "win32") {
+    throw new Error(
+      "The packaging helper supports macOS and Linux. On Windows, use the manual build and installation commands in README.md.",
+    );
+  }
+
+  if (packageOptions.shouldInstallExtension) {
+    runCommand("code", ["--version"], projectRootDirPath);
+    runCommand("pnpm", ["install", "--frozen-lockfile"], projectRootDirPath);
+  }
+
   const extensionPackageFilePath = path.join(extensionDirPath, "package.json");
   const extensionPackageFileContent = fs.readFileSync(
     extensionPackageFilePath,
     "utf8",
   );
   const extensionPackageConfig = JSON.parse(extensionPackageFileContent);
-  const shouldCreateSnapshot = process.argv.includes("--snapshot");
-  const shouldCreatePreRelease = process.argv.includes("--pre-release");
-  const shouldInstallExtension = process.argv.includes("--install");
-
-  if (shouldCreateSnapshot && shouldCreatePreRelease) {
-    throw new Error("A VSIX cannot be both a local snapshot and a pre-release.");
-  }
-
   const artifactFileName = buildArtifactFileName(
     extensionPackageConfig.version,
-    shouldCreateSnapshot,
-    shouldCreatePreRelease,
+    packageOptions,
   );
   const artifactFilePath = path.join(artifactDirPath, artifactFileName);
   const packageCommandArguments = [
@@ -36,21 +41,28 @@ function main() {
     "vsce",
     "package",
     "--no-dependencies",
-    ...(shouldCreatePreRelease ? ["--pre-release"] : []),
+    ...(packageOptions.shouldCreatePreRelease ? ["--pre-release"] : []),
     "--out",
     artifactFilePath,
   ];
 
   fs.mkdirSync(artifactDirPath, { recursive: true });
 
+  runCommand(
+    "pnpm",
+    ["--filter", "@vscx/core", "run", "build"],
+    projectRootDirPath,
+  );
   runCommand("pnpm", ["run", "build"], extensionDirPath);
   runCommand("pnpm", packageCommandArguments, extensionDirPath);
 
   console.log(`Created ${artifactFilePath}`);
 
-  if (!shouldInstallExtension) {
+  if (!packageOptions.shouldInstallExtension) {
+    const artifactFilePathQuoted = "'" + artifactFilePath.replaceAll("'", "'\"'\"'") + "'";
+
     console.log(
-      `Install with:\ncode --install-extension ${JSON.stringify(artifactFilePath)} --force`,
+      `Install with:\ncode --install-extension ${artifactFilePathQuoted} --force`,
     );
 
     return;
@@ -61,18 +73,45 @@ function main() {
     ["--install-extension", artifactFilePath, "--force"],
     projectRootDirPath,
   );
+
+  console.log(
+    'Installed VSCX. Run "Developer: Reload Window" in VS Code, then run vscx doctor and vscx info in a new integrated terminal to verify the bundled CLI and connection.',
+  );
 }
 
-function buildArtifactFileName(
-  extensionVersion,
-  shouldCreateSnapshot,
-  shouldCreatePreRelease,
-) {
-  if (shouldCreatePreRelease) {
+function parsePackageOptions() {
+  const packageArguments = process.argv.slice(2);
+
+  for (const packageArgument of packageArguments) {
+    if (supportedArguments.has(packageArgument)) continue;
+
+    throw new Error(`Unknown argument: ${packageArgument}`);
+  }
+
+  const packageOptions = {
+    shouldCreateSnapshot: packageArguments.includes("--snapshot"),
+    shouldCreatePreRelease: packageArguments.includes("--pre-release"),
+    shouldInstallExtension: packageArguments.includes("--install"),
+  };
+
+  if (
+    packageOptions.shouldCreateSnapshot &&
+    packageOptions.shouldCreatePreRelease
+  ) {
+    throw new Error("A VSIX cannot be both a local snapshot and a pre-release.");
+  }
+
+  return packageOptions;
+}
+
+function buildArtifactFileName(extensionVersion, packageOptions) {
+  if (packageOptions.shouldCreatePreRelease) {
     return `vscx-${extensionVersion}-pre-release.vsix`;
   }
 
-  if (!shouldCreateSnapshot) return `vscx-${extensionVersion}.vsix`;
+  if (!packageOptions.shouldCreateSnapshot) {
+    return `vscx-${extensionVersion}.vsix`;
+  }
 
   const snapshotTimestamp = formatSnapshotTimestamp(new Date());
 
@@ -88,10 +127,8 @@ function formatSnapshotTimestamp(snapshotDate) {
 }
 
 function runCommand(commandName, commandArguments, currentDirPath) {
-  const executableFileName =
-    process.platform === "win32" ? `${commandName}.cmd` : commandName;
   const commandResult = childProcess.spawnSync(
-    executableFileName,
+    commandName,
     commandArguments,
     {
       cwd: currentDirPath,
@@ -99,9 +136,18 @@ function runCommand(commandName, commandArguments, currentDirPath) {
     },
   );
 
+  if (commandResult.error?.code === "ENOENT") {
+    const installHint = commandName === "code"
+      ? 'Install VS Code\'s command-line launcher (on macOS, run "Shell Command: Install \'code\' command in PATH" from the Command Palette), then retry.'
+      : "Install the pnpm version declared in package.json, then retry.";
+
+    throw new Error(`${commandName} is not available on PATH. ${installHint}`);
+  }
+
   if (commandResult.error) throw commandResult.error;
   if (commandResult.status === 0) return;
 
+  console.error(`${commandName} ${commandArguments.join(" ")} failed.`);
   process.exit(commandResult.status ?? 1);
 }
 
