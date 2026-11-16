@@ -162,7 +162,9 @@ The extension persistently contributes a stable CLI directory to `PATH` and sets
 
 On macOS and Linux, the CLI asks registered local windows for their live terminal process IDs and matches its nearest process ancestor. This identifies the owning window after reloads, restarts, or terminal moves, including empty windows and shells whose current directory belongs to a different workspace. Confirmed process IDs remain usable in partial reports. An unrelated busy or older desktop window does not block a known owner when process ancestry rules out a closer terminal in that window. Explicit selectors take precedence.
 
-If an integrated terminal's owner cannot be confirmed, VSCX requires `--window` or `--workspace`. It does not fall through to another window while the owner is starting. Windows, remote terminals, and unavailable process information may require explicit selection. An unresolved nested window still blocks selection when it could own a closer terminal. External shells retain unique workspace and sole-window fallbacks. Ambiguous matches always require selection.
+If an integrated terminal's owner cannot be confirmed, VSCX requires `--window` or `--workspace`. Without an ownership match, integrated terminals never fall back to a window selected by working directory or window count. Windows, remote terminals, and unavailable process information may require explicit selection. A registered unresolved nested window still blocks selection when it could own a closer terminal. External shells retain unique workspace and sole-window fallbacks. Ambiguous matches always require selection.
+
+Only registered windows participate in discovery. Before using automatic selection in a nested editor instance, wait until that instance appears in `vscx windows`. Until then, a registered outer terminal can still match.
 
 Terminals created before this update may need one recreation to receive the stable `PATH`. After that, reloads and restarts preserve CLI access without persisting credentials. If you run incompatible extension development builds, use separate VS Code user data directories: builds sharing extension storage share the last copied CLI.
 

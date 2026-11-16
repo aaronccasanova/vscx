@@ -36,7 +36,7 @@ The default target order is:
 2. For external shells, the unique registered window containing the current working directory.
 3. For external shells, the only registered window.
 
-An integrated terminal with unresolved ownership never falls through to another window. Confirmed PIDs in partial reports remain usable. Unrelated busy or older desktop windows do not block a known owner when process ancestry rules them out. A potentially closer unresolved window, unavailable host ancestry, Windows, and remote terminals may require an explicit selector. Old injected endpoint, token, and window values are ignored for automatic selection. `doctor` reports the selected window and resolution source, and fails when selection or that connection is unavailable even if another window is healthy.
+An integrated terminal with no ownership match never falls back to workspace or sole-window selection. Confirmed PIDs in partial reports remain usable. Unrelated busy or older desktop windows do not block a known owner when process ancestry rules them out. A registered potentially closer unresolved window, unavailable host ancestry, Windows, and remote terminals may require an explicit selector. Before automatic selection in a nested editor instance, wait until it appears in `vscx windows`, as an unregistered inner instance cannot block an outer terminal match. Old injected endpoint, token, and window values are ignored for automatic selection. `doctor` reports the selected window and resolution source, and fails when selection or that connection is unavailable even if another window is healthy.
 
 VSCX refuses to guess when several windows match. Inspect and select one:
 
