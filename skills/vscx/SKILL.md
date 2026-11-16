@@ -19,7 +19,7 @@ Read only the references needed for the current task.
 ## Follow the operating workflow
 
 1. Run `vscx doctor`, then `vscx info`, before relying on the bridge.
-2. Use the terminal's injected connection when it is healthy. If selection is ambiguous, run `vscx windows` and choose an exact `--window` or `--workspace` target. Do not guess.
+2. Use automatic terminal ownership when it resolves successfully. If ownership is unavailable or selection is ambiguous, run `vscx windows` and choose an exact `--window` or `--workspace` target. Do not guess.
 3. Inspect relevant API declarations with `vscx api --find <name>` before using an unfamiliar VS Code API.
 4. Use the smallest evaluation that retrieves or changes the relevant state.
 5. For complex evaluations, pass code through stdin or `--file`, pass data through `--input`, and request `--json` when another program or agent will consume the result.

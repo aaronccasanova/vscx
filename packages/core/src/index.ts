@@ -3,6 +3,7 @@ export * from "./discovery.js";
 export * from "./errors.js";
 export * from "./jobs.js";
 export * from "./protocol.js";
+export * from "./process-ancestry.js";
 export * from "./registry.js";
 export * from "./serialization.js";
 export * from "./server.js";

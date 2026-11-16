@@ -146,27 +146,22 @@ nodeTest.test("prunes registry entries for stopped processes", () => {
   );
 });
 
-nodeTest.test("prefers injected environment for the current target", () => {
-  const bridgeTargets = resolveBridgeTargets({
-    environment: {
-      VSCX_ENDPOINT: "http://127.0.0.1:1234",
-      VSCX_TOKEN: "secret",
-      VSCX_WINDOW_ID: "window-a",
-    },
-    runtimeDirPath: createTemporaryDirPath(),
+nodeTest.test("ignores stale injected credentials and discovers a current registry window", async () => {
+  const runtimeDirPath = createTemporaryDirPath();
+
+  writeRuntimeRegistryEntry(buildRuntimeRegistryEntry({ windowId: "current-window" }), { runtimeDirPath });
+
+  const bridgeTargets = await resolveBridgeTargets({
+    ancestorProcessIds: [],
+    environment: { VSCX_ENDPOINT: "http://127.0.0.1:1", VSCX_TOKEN: "stale" },
+    runtimeDirPath,
   });
 
-  assert.deepEqual(bridgeTargets, [
-    {
-      endpoint: "http://127.0.0.1:1234",
-      source: "environment",
-      token: "secret",
-      windowId: "window-a",
-    },
-  ]);
+  assert.equal(bridgeTargets[0]?.windowId, "current-window");
+  assert.equal(bridgeTargets[0]?.token, "secret");
 });
 
-nodeTest.test("rejects ambiguous workspace targets", () => {
+nodeTest.test("rejects ambiguous workspace targets", async () => {
   const temporaryDirPath = createTemporaryDirPath();
 
   writeRuntimeRegistryEntry(
@@ -178,9 +173,10 @@ nodeTest.test("rejects ambiguous workspace targets", () => {
     { runtimeDirPath: temporaryDirPath },
   );
 
-  assert.throws(
+  await assert.rejects(
     () =>
       resolveBridgeTargets({
+        ancestorProcessIds: [],
         currentDirPath: process.cwd(),
         environment: {},
         runtimeDirPath: temporaryDirPath,

@@ -19,6 +19,8 @@ import * as vscode from "vscode";
 
 import { readApiDeclarations, searchApiDeclarations } from "./declarations";
 import { evaluateBridgeCode } from "./evaluator";
+import { configureTerminalEnvironment } from "./terminal-environment";
+import { getTerminalOwnership } from "./terminal-ownership";
 
 interface BridgeRuntimeStatus {
   cliFilePath: string;
@@ -46,6 +48,13 @@ export class BridgeRuntime implements vscode.Disposable {
   async start(): Promise<void> {
     if (this.#bridgeServer) return;
 
+    await configureTerminalEnvironment({
+      environmentVariableCollection: this.#extensionContext.environmentVariableCollection,
+      extensionDirPath: this.#extensionContext.extensionPath,
+      globalStorageDirPath: this.#extensionContext.globalStorageUri.fsPath,
+      runtimeDirPath: getRuntimeRegistryDirPath(),
+    });
+
     this.#bridgeServer = await createBridgeServer({
       extensionVersion: this.#getExtensionVersion(),
       handleRequest: (bridgeServerContext) =>
@@ -62,7 +71,6 @@ export class BridgeRuntime implements vscode.Disposable {
     );
 
     writeRuntimeRegistryEntry(runtimeRegistryEntry);
-    this.#injectTerminalEnvironment(runtimeRegistryEntry);
     this.#registerUserInterface();
 
     this.#outputChannel.info(
@@ -75,7 +83,6 @@ export class BridgeRuntime implements vscode.Disposable {
 
     this.#disposed = true;
 
-    this.#extensionContext.environmentVariableCollection.clear();
     removeRuntimeRegistryEntry(this.#windowId);
 
     await this.#jobManager.disposeAll();
@@ -91,6 +98,8 @@ export class BridgeRuntime implements vscode.Disposable {
     switch (bridgeServerContext.request.op) {
       case "info":
         return this.#buildRuntimeStatus();
+      case "terminals.processes":
+        return getTerminalOwnership(vscode.window);
       case "eval":
         return evaluateBridgeCode({
           bridgeRequest: bridgeServerContext.request,
@@ -194,31 +203,6 @@ export class BridgeRuntime implements vscode.Disposable {
       : "0.0.0";
   }
 
-  #injectTerminalEnvironment(runtimeRegistryEntry: RuntimeRegistryEntry): void {
-    const environmentVariables =
-      this.#extensionContext.environmentVariableCollection;
-    const cliBinDirPath = path.join(
-      this.#extensionContext.extensionPath,
-      "bin",
-    );
-
-    environmentVariables.persistent = false;
-    environmentVariables.description =
-      "VSCX connects new terminals automatically. Recreate terminals opened before VSCX activated.";
-    environmentVariables.replace("VSCX_ENDPOINT", runtimeRegistryEntry.endpoint);
-    environmentVariables.replace("VSCX_TOKEN", runtimeRegistryEntry.token);
-    environmentVariables.replace("VSCX_WINDOW_ID", runtimeRegistryEntry.windowId);
-    environmentVariables.replace(
-      "VSCX_PROTOCOL_VERSION",
-      String(runtimeRegistryEntry.protocolVersion),
-    );
-    environmentVariables.replace(
-      "VSCX_RUNTIME_DIR",
-      getRuntimeRegistryDirPath(),
-    );
-    environmentVariables.prepend("PATH", `${cliBinDirPath}${path.delimiter}`);
-  }
-
   #registerUserInterface(): void {
     this.#statusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -227,7 +211,7 @@ export class BridgeRuntime implements vscode.Disposable {
     this.#statusBarItem.name = "VSCX bridge";
     this.#statusBarItem.text = "$(radio-tower) VSCX";
     this.#statusBarItem.tooltip =
-      "The local VSCX bridge is running. New terminals connect automatically.";
+      "The local VSCX bridge is running. Terminals discover their current connection.";
     this.#statusBarItem.command = "vscx.showStatus";
     this.#statusBarItem.show();
 
@@ -237,7 +221,7 @@ export class BridgeRuntime implements vscode.Disposable {
       vscode.commands.registerCommand("vscx.showStatus", async () => {
         const bridgeRuntimeStatus = this.#buildRuntimeStatus();
         const selectedAction = await vscode.window.showInformationMessage(
-          `VSCX is running for this window (${this.#windowId.slice(0, 8)}). New terminals connect automatically. Recreate terminals opened before VSCX activated.`,
+          `VSCX is running for this window (${this.#windowId.slice(0, 8)}). Integrated terminals discover their current connection automatically.`,
           "Open connected terminal",
           "Show diagnostics",
         );
@@ -269,7 +253,7 @@ export class BridgeRuntime implements vscode.Disposable {
     }
 
     return {
-      cliFilePath: path.join(this.#extensionContext.extensionPath, "bin", "vscx"),
+      cliFilePath: path.join(this.#extensionContext.globalStorageUri.fsPath, "cli", "bin", "vscx"),
       endpoint: this.#bridgeServer.endpoint,
       metadata: this.#getHostMetadata(),
       registryDirPath: getRuntimeRegistryDirPath(),

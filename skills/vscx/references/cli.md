@@ -10,7 +10,7 @@ Inside a new VS Code integrated terminal, prefer:
 vscx help
 ```
 
-The extension adds its bundled CLI to `PATH` when VS Code creates a terminal. A terminal that was already open when the extension activated keeps its old environment. Recreate that terminal, or run `VSCX: Open connected terminal`, when `vscx` is missing.
+The extension persistently adds a stable CLI directory to `PATH`, so restored terminals retain it across reloads, restarts, and extension upgrades. A terminal created before the first updated activation may need one recreation, or `VSCX: Open connected terminal`, to receive this path. Wait for the bridge to activate before running connected commands.
 
 When developing this repository outside a packaged extension terminal, build first and use:
 
@@ -32,9 +32,11 @@ vscx info --json
 
 The default target order is:
 
-1. The connection injected into the current terminal.
-2. The unique registered window containing the current working directory.
-3. The only registered window.
+1. The window owning the nearest terminal ancestor process (macOS and Linux).
+2. For external shells, the unique registered window containing the current working directory.
+3. For external shells, the only registered window.
+
+An integrated terminal with unresolved ownership never falls through to another window. Pending terminal PIDs, unavailable windows, Windows, and remote terminals may require an explicit selector. Old injected endpoint, token, and window values are ignored for automatic selection. `doctor` reports the selected window and resolution source, and fails when selection or that connection is unavailable even if another window is healthy.
 
 VSCX refuses to guess when several windows match. Inspect and select one:
 
@@ -97,9 +99,10 @@ Prefer `rpc` for a long-lived machine protocol. Prefer direct commands for inter
 
 ## Recover from connection problems
 
-- `vscx: command not found`: Recreate the terminal after VSCX activates, or run `VSCX: Open connected terminal`.
+- `vscx: command not found`: A terminal predating the stable CLI contribution needs one recreation after VSCX activates, or `VSCX: Open connected terminal`.
 - No registered windows: Confirm the VSCX extension is installed and active, then reload the VS Code window.
 - A stale window: Reload or close the corresponding window. Records are removed automatically after their extension-host process exits.
+- Unresolved terminal ownership: Wait for activation or terminal startup and retry. If it persists, inspect `vscx windows` and select `--window` explicitly.
 - An ambiguous window: Select an exact `--window` or `--workspace` target.
 - An untrusted workspace: Explain that VSCX is disabled for untrusted workspaces. The user must decide whether to trust it.
 - A timeout: Prefer a smaller operation. Increase `--timeout` only when the work is expected and cooperative.

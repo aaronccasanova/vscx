@@ -1,7 +1,9 @@
 import * as path from "node:path";
 
+import { createBridgeRequest, sendBridgeRequest } from "./client.js";
 import { VscxError } from "./errors.js";
-import type { BridgeConnection } from "./protocol.js";
+import { getAncestorProcessIds } from "./process-ancestry.js";
+import { isRecord, type BridgeConnection } from "./protocol.js";
 import {
   pruneStaleRuntimeRegistryEntries,
   type RuntimeRegistryEntry,
@@ -16,19 +18,26 @@ export interface BridgeTargetSelector {
 }
 
 export interface ResolveBridgeTargetsOptions extends RuntimeRegistryOptions {
+  ancestorProcessIds?: readonly number[];
   currentDirPath?: string;
   environment?: NodeJS.ProcessEnv;
   selector?: BridgeTargetSelector;
 }
 
 export interface ResolvedBridgeTarget extends BridgeConnection {
-  source: "environment" | "explicit-endpoint" | "registry";
+  source:
+    | "environment"
+    | "explicit-endpoint"
+    | "registry"
+    | "terminal"
+    | "workspace"
+    | "single-window";
   registryEntry?: RuntimeRegistryEntry;
 }
 
-export function resolveBridgeTargets(
+export async function resolveBridgeTargets(
   options: ResolveBridgeTargetsOptions = {},
-): ResolvedBridgeTarget[] {
+): Promise<ResolvedBridgeTarget[]> {
   const selector = options.selector ?? {};
 
   validateBridgeTargetSelector(selector);
@@ -51,14 +60,6 @@ export function resolveBridgeTargets(
         token,
       },
     ];
-  }
-
-  if (!selector.windowId && !selector.all && !selector.workspace) {
-    const environmentTarget = getEnvironmentTarget(
-      options.environment ?? process.env,
-    );
-
-    if (environmentTarget) return [environmentTarget];
   }
 
   const runtimeRegistryEntries = pruneStaleRuntimeRegistryEntries(options);
@@ -96,6 +97,10 @@ export function resolveBridgeTargets(
     return getUniqueTargetOrThrow(workspaceTargets, selector.workspace);
   }
 
+  const terminalTargets = await getTerminalTargets(runtimeRegistryEntries, options);
+
+  if (terminalTargets.length > 0) return terminalTargets;
+
   const currentDirPath = path.resolve(options.currentDirPath ?? process.cwd());
   const currentWorkspaceTargets = getWorkspaceTargets(
     runtimeRegistryEntries,
@@ -103,17 +108,20 @@ export function resolveBridgeTargets(
   );
 
   if (currentWorkspaceTargets.length > 0) {
-    return getUniqueTargetOrThrow(currentWorkspaceTargets, currentDirPath);
+    return getUniqueTargetOrThrow(currentWorkspaceTargets, currentDirPath).map((target) => ({
+      ...target,
+      source: "workspace",
+    }));
   }
 
   if (runtimeRegistryEntries.length === 1 && runtimeRegistryEntries[0]) {
-    return [buildRegistryTarget(runtimeRegistryEntries[0])];
+    return [{ ...buildRegistryTarget(runtimeRegistryEntries[0]), source: "single-window" }];
   }
 
   if (runtimeRegistryEntries.length === 0) {
     throw new VscxError(
       "no-windows",
-      "No VSCX window is discoverable. Install or activate the extension, then open a new integrated terminal.",
+      "No VSCX window is discoverable. Install or activate the extension in the intended VS Code window.",
     );
   }
 
@@ -124,6 +132,7 @@ export function resolveBridgeTargets(
   );
 }
 
+/** @deprecated Environment values do not prove ownership. Use await resolveBridgeTargets(). */
 export function getEnvironmentTarget(
   environment: NodeJS.ProcessEnv,
 ): ResolvedBridgeTarget | undefined {
@@ -153,6 +162,94 @@ export function validateBridgeTargetSelector(selector: BridgeTargetSelector): vo
     "incompatible-targets",
     "Use only one of --all, --endpoint, --window, or --workspace.",
   );
+}
+
+async function getTerminalTargets(
+  runtimeRegistryEntries: RuntimeRegistryEntry[],
+  options: ResolveBridgeTargetsOptions,
+): Promise<ResolvedBridgeTarget[]> {
+  const ancestorProcessIds = options.ancestorProcessIds ?? getAncestorProcessIds();
+  const terminalOwners = await Promise.all(
+    runtimeRegistryEntries.map(async (runtimeRegistryEntry) => {
+      if (runtimeRegistryEntry.remoteAuthority || ancestorProcessIds.length === 0) {
+        return undefined;
+      }
+
+      try {
+        const bridgeResponse = await sendBridgeRequest(
+          buildRegistryTarget(runtimeRegistryEntry),
+          createBridgeRequest({ op: "terminals.processes", timeoutMs: 500 }),
+          { signal: AbortSignal.timeout(750) },
+        );
+
+        if (
+          !bridgeResponse.ok ||
+          bridgeResponse.windowId !== runtimeRegistryEntry.windowId ||
+          !isRecord(bridgeResponse.value) ||
+          bridgeResponse.value.complete !== true ||
+          !Array.isArray(bridgeResponse.value.processIds) ||
+          !bridgeResponse.value.processIds.every((processId) =>
+            typeof processId === "number" && Number.isInteger(processId) && processId > 0,
+          )
+        ) {
+          return { complete: false, ancestorIndex: -1, runtimeRegistryEntry };
+        }
+
+        const terminalProcessIds = bridgeResponse.value.processIds;
+        const ancestorIndex = ancestorProcessIds.findIndex((ancestorProcessId) =>
+          terminalProcessIds.includes(ancestorProcessId),
+        );
+
+        return { complete: true, ancestorIndex, runtimeRegistryEntry };
+      } catch {
+        return { complete: false, ancestorIndex: -1, runtimeRegistryEntry };
+      }
+    }),
+  );
+  const matchingTerminalOwners = terminalOwners
+    .filter((terminalOwner) => terminalOwner !== undefined)
+    .filter((terminalOwner) => terminalOwner.ancestorIndex >= 0);
+  const ownershipIncomplete = terminalOwners.some(
+    (terminalOwner) => terminalOwner?.complete === false,
+  );
+  const environment = options.environment ?? process.env;
+  const integratedTerminal = Boolean(
+    environment.TERM_PROGRAM === "vscode" ||
+    environment.VSCODE_IPC_HOOK_CLI ||
+    environment.VSCX_WINDOW_ID,
+  );
+
+  if (ownershipIncomplete && (integratedTerminal || matchingTerminalOwners.length > 0)) {
+    throw new VscxError(
+      "terminal-ownership-unavailable",
+      "A VSCX window could not confirm terminal ownership. Wait for activation or terminal startup, then retry, or select --window explicitly.",
+    );
+  }
+
+  const nearestAncestorIndex = Math.min(
+    ...matchingTerminalOwners.map((terminalOwner) => terminalOwner.ancestorIndex),
+  );
+  const terminalTargets = matchingTerminalOwners
+    .filter((terminalOwner) => terminalOwner.ancestorIndex === nearestAncestorIndex)
+    .map((terminalOwner) => ({
+      ...buildRegistryTarget(terminalOwner.runtimeRegistryEntry),
+      source: "terminal" as const,
+    }));
+
+  if (terminalTargets.length > 0) {
+    return getUniqueTargetOrThrow(terminalTargets, "the current terminal");
+  }
+
+  // Per-activation values in old terminals cannot establish current ownership.
+  // In particular, a terminal can move while its original window remains live.
+  if (integratedTerminal) {
+    throw new VscxError(
+      "terminal-owner-not-found",
+      "The current integrated terminal's VSCX window is not ready or its ownership cannot be determined. Wait for VSCX to activate, or run 'vscx windows' and select --window explicitly.",
+    );
+  }
+
+  return [];
 }
 
 function getWorkspaceTargets(
