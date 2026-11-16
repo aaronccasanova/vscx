@@ -64,6 +64,16 @@ nodeTest.test("does not treat a native terminal without a process ID as complete
   });
 });
 
+nodeTest.test("keeps native process IDs when a task terminal reports a sentinel process ID", async () => {
+  const nativeTerminal = createTerminal(Promise.resolve(200));
+  const taskTerminal = createTerminal(Promise.resolve(-1));
+
+  assert.deepEqual(await getTerminalOwnership({ terminals: [nativeTerminal, taskTerminal] }), {
+    complete: false,
+    processIds: [200],
+  });
+});
+
 nodeTest.test("ignores extension pseudoterminals with no native process", async () => {
   const terminal = { creationOptions: { pty: {} }, exitStatus: undefined, processId: new Promise(() => {}) } as unknown as vscode.Terminal;
 

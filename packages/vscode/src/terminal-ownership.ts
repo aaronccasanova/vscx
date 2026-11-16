@@ -21,7 +21,7 @@ export async function getTerminalOwnership(window: Pick<typeof vscode.window, "t
 
       if (terminal.exitStatus !== undefined || !window.terminals.includes(terminal)) return;
 
-      if (!processId) {
+      if (processId === undefined || !Number.isSafeInteger(processId) || processId <= 0) {
         complete = false;
 
         return;
