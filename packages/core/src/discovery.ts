@@ -2,7 +2,7 @@ import * as path from "node:path";
 
 import { createBridgeRequest, sendBridgeRequest } from "./client.js";
 import { VscxError } from "./errors.js";
-import { getAncestorProcessIds } from "./process-ancestry.js";
+import { createProcessAncestryReader, type ProcessAncestry } from "./process-ancestry.js";
 import { isRecord, type BridgeConnection } from "./protocol.js";
 import {
   pruneStaleRuntimeRegistryEntries,
@@ -21,6 +21,7 @@ export interface ResolveBridgeTargetsOptions extends RuntimeRegistryOptions {
   ancestorProcessIds?: readonly number[];
   currentDirPath?: string;
   environment?: NodeJS.ProcessEnv;
+  getProcessAncestry?: (processId: number) => ProcessAncestry;
   selector?: BridgeTargetSelector;
 }
 
@@ -168,7 +169,8 @@ async function getTerminalTargets(
   runtimeRegistryEntries: RuntimeRegistryEntry[],
   options: ResolveBridgeTargetsOptions,
 ): Promise<ResolvedBridgeTarget[]> {
-  const ancestorProcessIds = options.ancestorProcessIds ?? getAncestorProcessIds();
+  const getProcessAncestry = options.getProcessAncestry ?? createProcessAncestryReader();
+  const ancestorProcessIds = options.ancestorProcessIds ?? getProcessAncestry(process.pid).processIds;
   const terminalOwners = await Promise.all(
     runtimeRegistryEntries.map(async (runtimeRegistryEntry) => {
       if (runtimeRegistryEntry.remoteAuthority || ancestorProcessIds.length === 0) {
@@ -186,7 +188,7 @@ async function getTerminalTargets(
           !bridgeResponse.ok ||
           bridgeResponse.windowId !== runtimeRegistryEntry.windowId ||
           !isRecord(bridgeResponse.value) ||
-          bridgeResponse.value.complete !== true ||
+          typeof bridgeResponse.value.complete !== "boolean" ||
           !Array.isArray(bridgeResponse.value.processIds) ||
           !bridgeResponse.value.processIds.every((processId) =>
             typeof processId === "number" && Number.isInteger(processId) && processId > 0,
@@ -200,7 +202,7 @@ async function getTerminalTargets(
           terminalProcessIds.includes(ancestorProcessId),
         );
 
-        return { complete: true, ancestorIndex, runtimeRegistryEntry };
+        return { complete: bridgeResponse.value.complete, ancestorIndex, runtimeRegistryEntry };
       } catch {
         return { complete: false, ancestorIndex: -1, runtimeRegistryEntry };
       }
@@ -209,9 +211,6 @@ async function getTerminalTargets(
   const matchingTerminalOwners = terminalOwners
     .filter((terminalOwner) => terminalOwner !== undefined)
     .filter((terminalOwner) => terminalOwner.ancestorIndex >= 0);
-  const ownershipIncomplete = terminalOwners.some(
-    (terminalOwner) => terminalOwner?.complete === false,
-  );
   const environment = options.environment ?? process.env;
   const integratedTerminal = Boolean(
     environment.TERM_PROGRAM === "vscode" ||
@@ -219,16 +218,35 @@ async function getTerminalTargets(
     environment.VSCX_WINDOW_ID,
   );
 
-  if (ownershipIncomplete && (integratedTerminal || matchingTerminalOwners.length > 0)) {
-    throw new VscxError(
-      "terminal-ownership-unavailable",
-      "A VSCX window could not confirm terminal ownership. Wait for activation or terminal startup, then retry, or select --window explicitly.",
-    );
-  }
-
   const nearestAncestorIndex = Math.min(
     ...matchingTerminalOwners.map((terminalOwner) => terminalOwner.ancestorIndex),
   );
+  const closerAncestorProcessIds = new Set(ancestorProcessIds.slice(0, nearestAncestorIndex));
+  const ownershipIncomplete = terminalOwners.some((terminalOwner) => {
+    if (!terminalOwner || terminalOwner.complete) return false;
+
+    if (matchingTerminalOwners.length === 0) return true;
+
+    if (closerAncestorProcessIds.size === 0) return false;
+
+    // Desktop terminals and extension hosts share a VS Code main process. An
+    // unresolved closer owner must share ancestry below the matched terminal.
+    if (terminalOwner.runtimeRegistryEntry.appHost !== "desktop") return true;
+
+    const processAncestry = getProcessAncestry(terminalOwner.runtimeRegistryEntry.processId);
+
+    return !processAncestry.complete || processAncestry.processIds.some((processId) =>
+      closerAncestorProcessIds.has(processId),
+    );
+  });
+
+  if (ownershipIncomplete && (integratedTerminal || matchingTerminalOwners.length > 0)) {
+    throw new VscxError(
+      "terminal-ownership-unavailable",
+      "A VSCX window could not confirm terminal ownership and may own a closer terminal. Wait for activation or terminal startup, then retry, or select --window explicitly.",
+    );
+  }
+
   const terminalTargets = matchingTerminalOwners
     .filter((terminalOwner) => terminalOwner.ancestorIndex === nearestAncestorIndex)
     .map((terminalOwner) => ({

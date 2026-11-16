@@ -189,16 +189,106 @@ nodeTest.test("ignores unsupported, malformed, or unauthenticated ownership resp
   );
 });
 
-nodeTest.test("does not choose an outer terminal while a closer window is unresolved", async () => {
+for (const scenario of [
+  { name: "an older host in the same VS Code instance", response: new VscxError("unsupported-operation", "Unsupported operation."), hostAncestors: [500, 900] },
+  { name: "a stalled host in the same VS Code instance", response: new Promise<JsonValue>(() => {}), hostAncestors: [500, 900] },
+  { name: "an incomplete host in a separate VS Code instance", response: { complete: false, processIds: [] }, hostAncestors: [600, 900] },
+]) {
+  nodeTest.test(`keeps a matched terminal usable alongside ${scenario.name}`, async () => {
+    const runtimeDirPath = createRuntimeDirPath();
+
+    await registerWindow(runtimeDirPath, "owner-window", [200]);
+    await registerWindow(runtimeDirPath, "unresolved-window", scenario.response);
+
+    const targets = await resolveBridgeTargets({
+      ancestorProcessIds: [100, 200, 400, 500, 900],
+      environment: { TERM_PROGRAM: "vscode" },
+      getProcessAncestry: (processId) => ({ complete: true, processIds: [processId, ...scenario.hostAncestors] }),
+      runtimeDirPath,
+    });
+
+    assert.equal(targets[0]?.windowId, "owner-window");
+    assert.equal(targets[0]?.source, "terminal");
+  });
+}
+
+nodeTest.test("uses a confirmed terminal PID from a partial ownership report", async () => {
   const runtimeDirPath = createRuntimeDirPath();
 
-  await registerWindow(runtimeDirPath, "outer-window", [300]);
-  await registerWindow(runtimeDirPath, "inner-window", { complete: false, processIds: [] });
+  await registerWindow(runtimeDirPath, "owner-with-pseudoterminal", { complete: false, processIds: [200] });
 
-  await assert.rejects(
-    resolveBridgeTargets({ ancestorProcessIds: [100, 200, 300], environment: { TERM_PROGRAM: "vscode" }, runtimeDirPath }),
-    (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable",
-  );
+  const targets = await resolveBridgeTargets({
+    ancestorProcessIds: [100, 200, 400, 500],
+    environment: { TERM_PROGRAM: "vscode" },
+    getProcessAncestry: (processId) => ({ complete: true, processIds: [processId, 500] }),
+    runtimeDirPath,
+  });
+
+  assert.equal(targets[0]?.windowId, "owner-with-pseudoterminal");
+});
+
+nodeTest.test("rejects duplicate ownership even when one matching report is partial", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "window-a", [200]);
+  await registerWindow(runtimeDirPath, "window-b", { complete: false, processIds: [200] });
+
+  await assert.rejects(resolveBridgeTargets({
+    ancestorProcessIds: [100, 200, 500],
+    environment: { TERM_PROGRAM: "vscode" },
+    getProcessAncestry: (processId) => ({ complete: true, processIds: [processId, 500] }),
+    runtimeDirPath,
+  }), (error: unknown) => error instanceof VscxError && error.code === "ambiguous-window");
+});
+
+nodeTest.test("does not choose an outer terminal while a closer window is unresolved", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+  const innerWindow = await registerWindow(runtimeDirPath, "inner-window", { complete: false, processIds: [] });
+
+  await registerWindow(runtimeDirPath, "outer-window", [300]);
+
+  for (const environment of [{ TERM_PROGRAM: "vscode" }, {}]) {
+    await assert.rejects(resolveBridgeTargets({
+      ancestorProcessIds: [100, 200, 250, 300, 500],
+      environment,
+      getProcessAncestry: (processId) => {
+        assert.equal(processId, innerWindow.processId);
+
+        return { complete: true, processIds: [processId, 250, 300, 500] };
+      },
+      runtimeDirPath,
+    }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
+  }
+});
+
+for (const processIds of [[], [700, 800]]) {
+  nodeTest.test(`fails closed when an unresolved host's ancestry is ${processIds.length ? "truncated" : "unavailable"}`, async () => {
+    const runtimeDirPath = createRuntimeDirPath();
+
+    await registerWindow(runtimeDirPath, "owner-window", [200]);
+    await registerWindow(runtimeDirPath, "unresolved-window", { complete: false, processIds: [] });
+
+    await assert.rejects(resolveBridgeTargets({
+      ancestorProcessIds: [100, 200, 500],
+      environment: { TERM_PROGRAM: "vscode" },
+      getProcessAncestry: () => ({ complete: false, processIds }),
+      runtimeDirPath,
+    }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
+  });
+}
+
+nodeTest.test("requires explicit selection for unresolved hosts outside the desktop topology", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "owner-window", [200]);
+  await registerWindow(runtimeDirPath, "unknown-topology", { complete: false, processIds: [] }, { appHost: "custom" });
+
+  await assert.rejects(resolveBridgeTargets({
+    ancestorProcessIds: [100, 200, 500],
+    environment: { TERM_PROGRAM: "vscode" },
+    getProcessAncestry: (processId) => ({ complete: true, processIds: [processId, 900] }),
+    runtimeDirPath,
+  }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
 });
 
 nodeTest.test("collects the caller's real process ancestry on supported local platforms", () => {
@@ -222,12 +312,14 @@ function createRuntimeDirPath(): string {
 async function registerWindow(
   runtimeDirPath: string,
   windowId: string,
-  terminalProcessIds: JsonValue | Promise<JsonValue>,
+  terminalProcessIds: JsonValue | Promise<JsonValue> | Error,
   overrides: Partial<RuntimeRegistryEntry> = {},
 ): Promise<RuntimeRegistryEntry> {
   const bridgeServer = await createBridgeServer({
     extensionVersion: "0.1.0",
     handleRequest: async () => {
+      if (terminalProcessIds instanceof Error) throw terminalProcessIds;
+
       const resolvedTerminalProcessIds = await terminalProcessIds;
 
       return Array.isArray(resolvedTerminalProcessIds)

@@ -26,4 +26,4 @@ import { resolveBridgeTargets } from "@vscx/core";
 const bridgeTargets = await resolveBridgeTargets();
 ```
 
-Explicit selectors bypass ownership inference. Host adapters can implement `terminals.processes` by returning `{ complete: boolean, processIds: number[] }`. Return `complete: false` when active native terminal process IDs are still pending. Incomplete reports must not cause a client to select a different window.
+Explicit selectors bypass ownership inference. Host adapters can implement `terminals.processes` by returning `{ complete: boolean, processIds: number[] }`. Return `complete: false` when active native terminal process IDs are still pending. Include all confirmed process IDs even in a partial report. The resolver can use them when desktop process ancestry rules out a closer owner among unresolved windows. Unknown or truncated host ancestry remains unresolved, and a potentially closer nested owner requires explicit selection.
