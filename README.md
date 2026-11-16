@@ -6,26 +6,59 @@ VSCX is a local control plane for the documented API of a running VS Code extens
 
 Use it to inspect live editor state, query diagnostics, discover VS Code APIs, automate the active window, and maintain long-lived extension-host jobs from a terminal or AI agent.
 
-## Get started
+## Install a local build
 
-1. Install the VSCX pre-release from the VS Code Marketplace.
-2. Install the agent skill globally:
+Local source builds are the primary development workflow. You can use the latest checkout without waiting for a release. npm and Marketplace publishing remain available for releases.
 
-   ```sh
-   npx skills add aaronccasanova/vscx --skill vscx --global
-   ```
+The one-command packaging and installation helpers support macOS and Linux. Requirements: Node.js 22 or newer, the pnpm version declared in `package.json`, desktop VS Code 1.100 or newer, and VS Code's `code` command on your `PATH`. On macOS, run "Shell Command: Install 'code' command in PATH" from VS Code's Command Palette if needed.
 
-3. Reload VS Code, open a trusted workspace, and create a new integrated terminal.
-4. Confirm the connection:
+Clone the repository, then install from source:
 
-   ```sh
-   vscx doctor
-   vscx info
-   ```
+```sh
+git clone https://github.com/aaronccasanova/vscx.git
+cd vscx
+pnpm install:snapshot
+```
 
-VSCX is now ready to use. The extension contributes the bundled `vscx` executable and the correct per-window connection to new integrated terminals. You do not need to install the CLI separately or configure connection credentials.
+The installer checks for `code`, runs `pnpm install --frozen-lockfile`, builds core and the extension, packages a timestamped VSIX under `artifacts/`, and runs `code --install-extension <artifact> --force`. The extension bundles the CLI from the same checkout. No separate CLI installation or publication is needed. Node.js 22 or newer must remain on `PATH` to run the CLI.
 
-If `vscx` is missing from a terminal that was already open, recreate it or run `VSCX: Open connected terminal` from the Command Palette.
+Run "Developer: Reload Window", open a trusted workspace, and create a new integrated terminal. Confirm the connection:
+
+```sh
+vscx doctor
+vscx info
+```
+
+The extension contributes the bundled `vscx` executable and the correct per-window connection to new integrated terminals. If `vscx` is missing from a terminal that was already open, recreate it or run `VSCX: Open connected terminal` from the Command Palette.
+
+To keep using local builds, disable auto-update for VSCX Host in VS Code's Extensions view so a later Marketplace release does not replace your build. Snapshot timestamps distinguish artifact filenames without changing source package versions.
+
+### Pull main and reinstall
+
+Use the same source checkout for later updates. Commit or otherwise preserve local changes before switching branches, then run:
+
+```sh
+git switch main
+git pull --ff-only
+pnpm install:snapshot
+```
+
+Reload the intended VS Code window and run `vscx doctor` and `vscx info` in a new terminal again. If an agent handles "pull main and reinstall", it should use this checkout, preserve local changes, stop if the pull cannot fast-forward, and report the installed commit, VSIX path, and connection check. The installer builds the current checkout. It does not switch branches, pull, or publish on your behalf.
+
+### Windows local builds
+
+The Node packaging helper does not currently support Windows command launchers. From PowerShell, use these equivalent commands (not yet validated on Windows):
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm --filter @vscx/core run build
+pnpm --filter vscode-vscx run build
+New-Item -ItemType Directory -Force artifacts | Out-Null
+pnpm --filter vscode-vscx exec vsce package --no-dependencies --out ../../artifacts/vscx-local.vsix
+code --install-extension artifacts/vscx-local.vsix --force
+```
+
+Reload VS Code and verify the connection in a new terminal afterward. This fallback reuses `artifacts/vscx-local.vsix`.
 
 ## Explore a VS Code window
 
@@ -90,6 +123,12 @@ printf '%s\n' \
 
 ## Agent skill
 
+Install the skill globally from your source checkout:
+
+```sh
+npx skills add . --skill vscx --global
+```
+
 The bundled VSCX skill teaches compatible AI agents how to orient themselves, select a live window, discover the documented API, write structured evaluations, manage long-lived jobs, and diagnose the bridge.
 
 The open `skills` installer supports Codex, Claude Code, Cursor, and other compatible agents. Start a new agent session after installation so it discovers the global skill. For example:
@@ -98,13 +137,7 @@ The open `skills` installer supports Codex, Claude Code, Cursor, and other compa
 Use $vscx to inspect the active VS Code window, summarize its current editor and diagnostics, and show me what else you can control.
 ```
 
-To test changes to the skill from a local repository checkout, install that copy globally:
-
-```sh
-npx skills add . --skill vscx --global
-```
-
-Start another new agent session after replacing the installed skill.
+Rerun the skill installation command after pulling skill updates, then start another new agent session.
 
 ## Architecture
 
@@ -171,25 +204,17 @@ vscx jobs dispose window-watch
 
 ## Develop and test
 
-Requirements: Node.js 22 or newer, pnpm 11, desktop VS Code 1.100 or newer, and the `code` command on your `PATH`.
+Install dependencies before running the development checks:
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run check
 pnpm run test
 pnpm run build
-pnpm package:local
+pnpm package:snapshot
 ```
 
-The last command creates a timestamped local VSIX under `artifacts/`. It does not publish or install anything.
-
-To build and install a local snapshot in VS Code:
-
-```sh
-pnpm install:snapshot
-```
-
-Reload the VS Code window after installation. VSCX requires a trusted workspace because an authenticated client can evaluate JavaScript in the extension host.
+The last command creates a timestamped local VSIX under `artifacts/` without installing or publishing it. `pnpm package:local` remains an alias. Packaging builds core before bundling the extension and CLI. To install the current checkout, use `pnpm install:snapshot` as described above.
 
 ## Release process
 

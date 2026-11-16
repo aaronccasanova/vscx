@@ -21,6 +21,12 @@ vscx api --find WorkspaceEdit
 
 If `vscx` is missing from a terminal that was already open, recreate that terminal. You can also run `VSCX: Open connected terminal` from the Command Palette.
 
+## Install or update from source
+
+Local builds are the primary development workflow. Clone the [VSCX repository](https://github.com/aaronccasanova/vscx#install-a-local-build), then run `pnpm install:snapshot` from the checkout on macOS or Linux. It installs locked dependencies, builds core and the extension with its bundled CLI, and installs a timestamped VSIX in VS Code. The repository guide includes requirements and a manual Windows sequence.
+
+For later updates, preserve local changes, switch to `main`, run `git pull --ff-only`, and rerun `pnpm install:snapshot`. Reload the intended VS Code window and verify `vscx doctor` and `vscx info` in a new terminal. Disable auto-update for VSCX Host if you want to retain local builds. Marketplace releases remain available.
+
 ## Use the CLI
 
 The main commands are:
