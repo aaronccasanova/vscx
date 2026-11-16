@@ -2,7 +2,7 @@
   <img src="packages/vscode/media/vscx-wordmark.png" alt="VSCX" width="320">
 </p>
 
-VSCX is a local control plane for the documented API of a running VS Code extension host. It combines an authenticated per-window HTTP bridge, a JSON-first CLI, and a VS Code extension that injects the correct connection into new integrated terminals.
+VSCX is a local control plane for the documented API of a running VS Code extension host. It combines an authenticated per-window HTTP bridge, a JSON-first CLI, and a VS Code extension that keeps its CLI available in persistent integrated terminals.
 
 Use it to inspect live editor state, query diagnostics, discover VS Code APIs, automate the active window, and maintain long-lived extension-host jobs from a terminal or AI agent.
 
@@ -29,7 +29,7 @@ vscx doctor
 vscx info
 ```
 
-The extension contributes the bundled `vscx` executable and the correct per-window connection to new integrated terminals. If `vscx` is missing from a terminal that was already open, recreate it or run `VSCX: Open connected terminal` from the Command Palette.
+The extension contributes a stable bundled `vscx` path and discovers the current connection automatically. A terminal opened before this updated extension first activated may need one recreation, or `VSCX: Open connected terminal`, to receive that path. Subsequent reloads, restarts, and upgrades preserve CLI access.
 
 To keep using local builds, disable auto-update for VSCX Host in VS Code's Extensions view so a later Marketplace release does not replace your build. Snapshot timestamps distinguish artifact filenames without changing source package versions.
 
@@ -43,7 +43,7 @@ git pull --ff-only
 pnpm install:snapshot
 ```
 
-Reload the intended VS Code window and run `vscx doctor` and `vscx info` in a new terminal again. If an agent handles "pull main and reinstall", it should use this checkout, preserve local changes, stop if the pull cannot fast-forward, and report the installed commit, VSIX path, and connection check. The installer builds the current checkout. It does not switch branches, pull, or publish on your behalf.
+Reload the intended VS Code window and run `vscx doctor` and `vscx info` in an existing integrated terminal. If an agent handles "pull main and reinstall", it should use this checkout, preserve local changes, stop if the pull cannot fast-forward, and report the installed commit, VSIX path, and connection check. The installer builds the current checkout. It does not switch branches, pull, or publish on your behalf.
 
 ### Windows local builds
 
@@ -158,9 +158,15 @@ The protocol types have no VS Code dependency and live in their own core module.
 
 ## Target selection
 
-The extension injects `VSCX_ENDPOINT`, `VSCX_TOKEN`, `VSCX_WINDOW_ID`, `VSCX_PROTOCOL_VERSION`, and `VSCX_RUNTIME_DIR` into new integrated terminals. It also prepends its bundled CLI directory to `PATH`.
+The extension persistently contributes a stable CLI directory to `PATH` and sets `VSCX_RUNTIME_DIR`. It copies its self-contained CLI into VS Code's extension storage, so restored terminals can run it before activation and after a versioned extension directory is removed. Endpoints, tokens, and window IDs stay in the user-only runtime registry and are refreshed on every activation.
 
-When those variables are absent, the CLI checks the user-only runtime registry. It removes records whose extension-host process has ended, then uses an explicit selector, the unique window containing the current directory, or the only registered window. It never guesses between multiple matches.
+On macOS and Linux, the CLI asks registered local windows for their live terminal process IDs and matches its nearest process ancestor. This identifies the owning window after reloads, restarts, or terminal moves, including empty windows and shells whose current directory belongs to a different workspace. Confirmed process IDs remain usable in partial reports. An unrelated busy or older desktop window does not block a known owner when process ancestry rules out a closer terminal in that window. Explicit selectors take precedence.
+
+If an integrated terminal's owner cannot be confirmed, VSCX requires `--window` or `--workspace`. Without an ownership match, integrated terminals never fall back to a window selected by working directory or window count. Windows, remote terminals, and unavailable process information may require explicit selection. A registered unresolved nested window still blocks selection when it could own a closer terminal. External shells retain unique workspace and sole-window fallbacks. Ambiguous matches always require selection.
+
+Only registered windows participate in discovery. Before using automatic selection in a nested editor instance, wait until that instance appears in `vscx windows`. Until then, a registered outer terminal can still match.
+
+Terminals created before this update may need one recreation to receive the stable `PATH`. After that, reloads and restarts preserve CLI access without persisting credentials. If you run incompatible extension development builds, use separate VS Code user data directories: builds sharing extension storage share the last copied CLI.
 
 ```sh
 vscx windows

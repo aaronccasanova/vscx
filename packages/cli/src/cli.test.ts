@@ -48,7 +48,7 @@ nodeTest.test("reports the package version", async () => {
   }
 });
 
-nodeTest.test("runs info against an injected endpoint without exposing its token", async () => {
+nodeTest.test("runs info through current terminal ownership without exposing its token", async () => {
   const bridgeServer = await createTestBridgeServer();
 
   try {
@@ -168,10 +168,57 @@ nodeTest.test("preserves per-window failures during explicit fan-out", async () 
   }
 });
 
+nodeTest.test("doctor reports actual terminal selection instead of stale environment presence", async () => {
+  const bridgeServer = await createTestBridgeServer();
+
+  try {
+    const cliResult = await runTestCli(["doctor", "--json"], "", bridgeServer, {
+      TERM_PROGRAM: "vscode",
+      VSCX_ENDPOINT: "http://127.0.0.1:1",
+      VSCX_TOKEN: "stale-token",
+      VSCX_WINDOW_ID: "stale-window",
+    });
+    const doctorResult = JSON.parse(cliResult.stdout);
+
+    assert.equal(cliResult.exitCode, 0);
+    assert.equal(doctorResult.ok, true);
+    assert.deepEqual(doctorResult.checks.selectedWindowIds, ["window-test"]);
+    assert.deepEqual(doctorResult.checks.resolutionSources, ["terminal"]);
+    assert.doesNotMatch(cliResult.stdout, /stale-token|a-very-secret-token/);
+  } finally {
+    await bridgeServer.close();
+  }
+});
+
+nodeTest.test("doctor fails unresolved selection even when a different window is healthy", async () => {
+  const bridgeServer = await createBridgeServer({
+    extensionVersion: "0.1.0",
+    handleRequest: async () => ({ complete: true, processIds: [] }),
+    token: "a-very-secret-token",
+    windowId: "window-test",
+  });
+
+  try {
+    const cliResult = await runTestCli(["doctor", "--json"], "", bridgeServer, { TERM_PROGRAM: "vscode" });
+    const doctorResult = JSON.parse(cliResult.stdout);
+
+    assert.equal(cliResult.exitCode, 1);
+    assert.equal(doctorResult.ok, false);
+    assert.equal(doctorResult.checks.healthyWindowCount, 1);
+    assert.equal(doctorResult.resolutionError.code, "terminal-owner-not-found");
+  } finally {
+    await bridgeServer.close();
+  }
+});
+
 async function createTestBridgeServer(): Promise<BridgeServer> {
   return createBridgeServer({
     extensionVersion: "0.0.1",
     handleRequest: async ({ request }) => {
+      if (request.op === "terminals.processes") {
+        return { complete: true, processIds: [process.pid] };
+      }
+
       if (request.op === "info") {
         return { windowId: "window-test" };
       }
@@ -203,10 +250,31 @@ async function runTestCli(
       callback();
     },
   });
+  const runtimeDirPath = environmentOverrides.VSCX_RUNTIME_DIR ?? fs.mkdtempSync(path.join(os.tmpdir(), "vscx-cli-test-"));
+
+  if (!environmentOverrides.VSCX_RUNTIME_DIR) {
+    writeRuntimeRegistryEntry({
+      appHost: "desktop",
+      appName: "Visual Studio Code",
+      createdAt: new Date().toISOString(),
+      endpoint: bridgeServer.endpoint,
+      extensionHostKind: "local-ui",
+      extensionVersion: "0.0.1",
+      processId: process.pid,
+      protocolVersion,
+      token: "a-very-secret-token",
+      updatedAt: new Date().toISOString(),
+      vscodeVersion: "1.100.0",
+      windowId: "window-test",
+      workspaceFolders: [process.cwd()],
+    }, { runtimeDirPath });
+  }
+
   const exitCode = await runCli({
     args,
     currentDirPath: process.cwd(),
     environment: {
+      VSCX_RUNTIME_DIR: runtimeDirPath,
       VSCX_ENDPOINT: bridgeServer.endpoint,
       VSCX_TOKEN: "a-very-secret-token",
       VSCX_WINDOW_ID: "window-test",
@@ -216,6 +284,8 @@ async function runTestCli(
     stdin: stream.Readable.from([standardInputFileContent]),
     stdout,
   });
+
+  if (!environmentOverrides.VSCX_RUNTIME_DIR) fs.rmSync(runtimeDirPath, { force: true, recursive: true });
 
   return {
     exitCode,

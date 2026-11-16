@@ -9,7 +9,15 @@ export async function activate(
 ): Promise<void> {
   bridgeRuntime = new BridgeRuntime(extensionContext);
 
-  await bridgeRuntime.start();
+  try {
+    await bridgeRuntime.start();
+  } catch (error) {
+    await bridgeRuntime.dispose();
+
+    bridgeRuntime = undefined;
+
+    throw error;
+  }
 }
 
 export async function deactivate(): Promise<void> {

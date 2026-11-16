@@ -21,18 +21,19 @@ The protocol is versioned inside core. Extract it into a separate package only w
 
 ## Understand activation and terminals
 
-The extension starts its bridge after VS Code startup and contributes these values to terminals created afterward:
+The extension starts its bridge after VS Code startup. Its persistent environment collection contains only `VSCX_RUNTIME_DIR` and a stable directory prepended to `PATH`. The CLI bundle and launchers are atomically refreshed under the extension's global storage `cli/` directory. Complete copied files remain callable before activation, across restarts, and after the old versioned extension directory is removed. Shutdown does not clear the contribution.
 
-- `VSCX_ENDPOINT`
-- `VSCX_TOKEN`
-- `VSCX_WINDOW_ID`
-- `VSCX_PROTOCOL_VERSION`
-- `VSCX_RUNTIME_DIR`
-- The bundled CLI directory prepended to `PATH`
+Endpoints, bearer tokens, and window IDs remain per activation and are read from the user-only registry. The CLI does not use old implicit `VSCX_ENDPOINT`, `VSCX_TOKEN`, or `VSCX_WINDOW_ID` values to choose a window. Explicit `--endpoint` remains available and requires `VSCX_TOKEN`.
 
-VS Code cannot retroactively replace the environment of a shell process that is already running. Recreate a pre-existing terminal when `vscx` is missing. `VSCX: Open connected terminal` is an explicit way to create one with the current environment.
+For automatic selection on macOS and Linux, the CLI obtains its local process ancestry and probes all registered local windows in parallel with bounded timeouts. The authenticated `terminals.processes` operation reports active terminal PIDs and whether the report is complete. The nearest matching terminal ancestor wins, including confirmed process IDs from partial reports. Exited terminals and locally identified extension pseudoterminals are excluded. Some task or cross-host terminals never expose a process ID, so their reports can remain partial. An incomplete or unavailable desktop window only blocks a known owner when its process ancestry could intersect the caller below the matched terminal, or when that ancestry is unavailable or truncated. Unrelated busy or older windows therefore do not block a healthy owner. A registered potentially closer nested owner still prevents automatic selection. Remote window PIDs are excluded because they belong to a different process namespace.
 
-When environment values are unavailable, a callable CLI can discover per-window records from the user-only runtime registry. It removes records whose extension-host process has ended, selects a unique workspace or sole window, and refuses ambiguous matches.
+Only registered windows participate. Before automatic selection in a nested editor instance, wait until it appears in `vscx windows`. An unregistered inner instance cannot block a match to an outer terminal.
+
+If ownership cannot be established, integrated terminals require an explicit selector. This includes Windows, remote terminals, an older host lacking the ownership operation, or a window still starting. External shells retain unique workspace and sole-window fallbacks. Multiple matches always require selection.
+
+VS Code cannot replace an already running process's environment. A terminal predating the first updated activation may need one recreation to receive the stable CLI path. `VSCX: Open connected terminal` is an optional convenience. After migration, restored terminals retain CLI access and discover the current bridge after it activates.
+
+Development builds sharing extension storage share the last copied CLI. Use separate VS Code user data directories for incompatible versions. Atomic replacement guarantees complete files, not compatibility between separately running development builds.
 
 ## Understand the trust boundary
 
@@ -44,7 +45,7 @@ VSCX does not activate in an untrusted workspace. Workspace trust is a user-cont
 
 Extension-host error stacks are omitted by default because they can contain local paths. The user can opt into them with `vscx.includeRemoteStacks` for local diagnostics.
 
-Do not add an MCP server to reach the bridge. The CLI is the agent-facing protocol client and works in terminals where an agent can use environment-based or registry-based discovery.
+Do not add an MCP server to reach the bridge. The CLI is the agent-facing protocol client and uses authenticated registry-based discovery.
 
 ## Account for topology and versions
 

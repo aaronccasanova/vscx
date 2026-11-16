@@ -8,7 +8,7 @@ This is an early pre-release. The protocol and command surface may change before
 
 ## Get started
 
-Install VSCX, trust the workspace, and reload the VS Code window. New integrated terminals receive the authenticated connection and the bundled `vscx` executable automatically.
+Install VSCX, trust the workspace, and reload the VS Code window. Integrated terminals receive a stable bundled `vscx` path and discover fresh authenticated connections automatically.
 
 Run:
 
@@ -19,13 +19,13 @@ vscx eval --code 'return vscode.version'
 vscx api --find WorkspaceEdit
 ```
 
-If `vscx` is missing from a terminal that was already open, recreate that terminal. You can also run `VSCX: Open connected terminal` from the Command Palette.
+A terminal created before the first updated activation may need one recreation to receive the stable CLI path. You can also run `VSCX: Open connected terminal` from the Command Palette. Subsequent reloads and restarts preserve CLI access.
 
 ## Install or update from source
 
 Local builds are the primary development workflow. Clone the [VSCX repository](https://github.com/aaronccasanova/vscx#install-a-local-build), then run `pnpm install:snapshot` from the checkout on macOS or Linux. It installs locked dependencies, builds core and the extension with its bundled CLI, and installs a timestamped VSIX in VS Code. The repository guide includes requirements and a manual Windows sequence.
 
-For later updates, preserve local changes, switch to `main`, run `git pull --ff-only`, and rerun `pnpm install:snapshot`. Reload the intended VS Code window and verify `vscx doctor` and `vscx info` in a new terminal. Disable auto-update for VSCX Host if you want to retain local builds. Marketplace releases remain available.
+For later updates, preserve local changes, switch to `main`, run `git pull --ff-only`, and rerun `pnpm install:snapshot`. Reload the intended VS Code window and verify `vscx doctor` and `vscx info` in an existing integrated terminal. Disable auto-update for VSCX Host if you want to retain local builds. Marketplace releases remain available.
 
 ## Use the CLI
 
@@ -39,13 +39,15 @@ The main commands are:
 - `vscx jobs` manages resources that outlive one evaluation.
 - `vscx rpc` processes newline-delimited JSON requests for agents and scripts.
 
-VSCX uses the current terminal's injected window first. Without that environment, it selects a unique window containing the current directory or the only registered window. It refuses ambiguous matches. Use `--window`, `--workspace`, or `--all` to make intent explicit.
+The persistent CLI discovers fresh credentials from the user-only registry. On macOS and Linux, it matches the current terminal's process ancestry against live windows before considering workspace paths. Reloads and restarts no longer require replacing the terminal. Terminals created before the first updated activation may need one recreation to receive the stable CLI path.
+
+When ownership is unavailable or a window is still starting, select `--window` or `--workspace` explicitly. Windows and remote terminals may need these selectors. External shells can still select a unique workspace or the sole window. Use `--all` only for intentional fan-out.
 
 ## Understand the security boundary
 
 Each window listens on a random `127.0.0.1` port and requires a random bearer token stored in a user-only runtime registry. VSCX never needs an internet-facing server or MCP adapter.
 
-Evaluation is not sandboxed. An authenticated client can run JavaScript in the extension host and invoke APIs available to VSCX. Keep `VSCX_TOKEN` secret and review agent-requested changes with the same care as local code execution.
+Evaluation is not sandboxed. An authenticated client can run JavaScript in the extension host and invoke APIs available to VSCX. Tokens are not injected into terminal environments or persisted environment collections. Protect registry access and review agent-requested changes with the same care as local code execution.
 
 VSCX does not activate in untrusted workspaces. Error stack traces are excluded from bridge responses by default because they can contain local paths. Enable `vscx.includeRemoteStacks` only for detailed local diagnostics.
 

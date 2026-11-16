@@ -15,6 +15,7 @@ export type BridgeOperation =
   | "api.find"
   | "eval"
   | "info"
+  | "terminals.processes"
   | "jobs.cancel"
   | "jobs.dispose"
   | "jobs.get"
@@ -83,6 +84,7 @@ const bridgeOperations = new Set<BridgeOperation>([
   "api.find",
   "eval",
   "info",
+  "terminals.processes",
   "jobs.cancel",
   "jobs.dispose",
   "jobs.get",

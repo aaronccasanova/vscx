@@ -5,7 +5,6 @@ import type * as stream from "node:stream";
 import {
   createBridgeRequest,
   getBridgeErrorData,
-  getEnvironmentTarget,
   probeBridgeConnection,
   protocolVersion,
   parseBridgeRequest,
@@ -14,6 +13,7 @@ import {
   sendBridgeRequest,
   vscxVersion,
   VscxError,
+  type BridgeErrorData,
   type BridgeOperation,
   type BridgeRequest,
   type BridgeResponse,
@@ -231,7 +231,11 @@ async function runWindowsCommand(commandContext: CommandContext): Promise<number
   const runtimeRegistryEntries = pruneStaleRuntimeRegistryEntries({
     environment: commandContext.environment,
   });
-  const environmentTarget = getEnvironmentTarget(commandContext.environment);
+  const selectedTargets = await resolveBridgeTargets({
+    currentDirPath: commandContext.currentDirPath,
+    environment: commandContext.environment,
+    selector: commandContext.arguments.selector,
+  }).catch(() => []);
   const windowDescriptions = await Promise.all(
     runtimeRegistryEntries.map(async (runtimeRegistryEntry) => {
       const bridgeProbe = await probeBridgeConnection({
@@ -239,7 +243,9 @@ async function runWindowsCommand(commandContext: CommandContext): Promise<number
         token: runtimeRegistryEntry.token,
       });
       const windowDescription: WindowDescription = {
-        active: environmentTarget?.windowId === runtimeRegistryEntry.windowId,
+        active: selectedTargets.some(
+          (target) => target.windowId === runtimeRegistryEntry.windowId,
+        ),
         appName: runtimeRegistryEntry.appName,
         endpoint: runtimeRegistryEntry.endpoint,
         extensionVersion: runtimeRegistryEntry.extensionVersion,
@@ -412,7 +418,22 @@ async function runDoctorCommand(commandContext: CommandContext): Promise<number>
   const runtimeRegistryEntries = pruneStaleRuntimeRegistryEntries({
     environment: commandContext.environment,
   });
-  const environmentTarget = getEnvironmentTarget(commandContext.environment);
+  let selectedTargets: ResolvedBridgeTarget[] = [];
+  let resolutionError: BridgeErrorData | undefined;
+
+  try {
+    selectedTargets = await resolveBridgeTargets({
+      currentDirPath: commandContext.currentDirPath,
+      environment: commandContext.environment,
+      selector: commandContext.arguments.selector,
+    });
+  } catch (error) {
+    resolutionError = getBridgeErrorData(error, false);
+  }
+
+  const selectedConnectionChecks = await Promise.all(
+    selectedTargets.map((target) => probeBridgeConnection(target)),
+  );
   const registryChecks = await Promise.all(
     runtimeRegistryEntries.map(async (runtimeRegistryEntry) => ({
       endpointReachable: (
@@ -429,18 +450,20 @@ async function runDoctorCommand(commandContext: CommandContext): Promise<number>
   ).length;
   const doctorResult = {
     checks: {
-      environmentConnection: Boolean(environmentTarget),
+      selectedWindowIds: selectedTargets.map((target) => target.windowId ?? "explicit endpoint"),
+      resolutionSources: selectedTargets.map((target) => target.source),
       healthyWindowCount,
       registryEntryCount: runtimeRegistryEntries.length,
       runtimeDirectory:
         commandContext.environment.VSCX_RUNTIME_DIR ?? "platform default",
     },
     guidance: getDoctorGuidance(
-      Boolean(environmentTarget),
+      resolutionError,
       runtimeRegistryEntries,
       healthyWindowCount,
     ),
-    ok: healthyWindowCount > 0,
+    ok: selectedConnectionChecks.length > 0 && selectedConnectionChecks.every((check) => check.ok),
+    ...(resolutionError ? { resolutionError } : {}),
     windows: registryChecks,
   };
 
@@ -449,7 +472,8 @@ async function runDoctorCommand(commandContext: CommandContext): Promise<number>
   } else {
     const doctorLines = [
       `VSCX doctor: ${doctorResult.ok ? "ready" : "not ready"}`,
-      `Environment connection: ${doctorResult.checks.environmentConnection ? "present" : "missing"}`,
+      `Window resolution: ${doctorResult.checks.resolutionSources.join(", ") || "unresolved"}`,
+      `Selected windows: ${doctorResult.checks.selectedWindowIds.join(", ") || "none"}`,
       `Registered windows: ${doctorResult.checks.registryEntryCount}`,
       `Healthy windows: ${doctorResult.checks.healthyWindowCount}`,
       ...doctorResult.guidance.map((guidanceLine) => `- ${guidanceLine}`),
@@ -470,7 +494,7 @@ async function sendRequestToSelectedTargets(
   commandContext: CommandContext,
   bridgeRequest: BridgeRequest,
 ): Promise<RequestResult[]> {
-  const bridgeTargets = resolveBridgeTargets({
+  const bridgeTargets = await resolveBridgeTargets({
     currentDirPath: commandContext.currentDirPath,
     environment: commandContext.environment,
     selector: commandContext.arguments.selector,
@@ -745,17 +769,13 @@ function getRequestIdFromLine(requestLine: string): string {
 }
 
 function getDoctorGuidance(
-  hasEnvironmentTarget: boolean,
+  resolutionError: BridgeErrorData | undefined,
   runtimeRegistryEntries: RuntimeRegistryEntry[],
   healthyWindowCount: number,
 ): string[] {
   const guidance: string[] = [];
 
-  if (!hasEnvironmentTarget) {
-    guidance.push(
-      "This shell has no injected connection. Open a new integrated terminal after VSCX activates.",
-    );
-  }
+  if (resolutionError) guidance.push(resolutionError.message);
 
   if (runtimeRegistryEntries.length === 0) {
     guidance.push(
