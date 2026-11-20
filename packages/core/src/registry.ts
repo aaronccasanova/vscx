@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,6 +29,7 @@ export interface RuntimeRegistryOptions {
 }
 
 const registryFileSuffix = ".json";
+const macTemporaryDirPathsByUserId = new Map<number | string, string>();
 
 export function getRuntimeRegistryDirPath(
   options: RuntimeRegistryOptions = {},
@@ -50,7 +52,9 @@ export function getRuntimeRegistryDirPath(
 
   const userId = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
 
-  return path.join(os.tmpdir(), `vscx-${userId}`);
+  const temporaryDirPath = getRuntimeTemporaryDirPath(environment, userId);
+
+  return path.join(temporaryDirPath, `vscx-${userId}`);
 }
 
 export function writeRuntimeRegistryEntry(
@@ -160,6 +164,42 @@ export function getRuntimeRegistryFilePath(
     getRuntimeRegistryDirPath(options),
     `${windowId}${registryFileSuffix}`,
   );
+}
+
+function getRuntimeTemporaryDirPath(
+  environment: NodeJS.ProcessEnv,
+  userId: number | string,
+): string {
+  if (process.platform !== "darwin") return os.tmpdir();
+  if (environment.TMPDIR) return environment.TMPDIR;
+
+  const macTemporaryDirPath = macTemporaryDirPathsByUserId.get(userId);
+
+  if (macTemporaryDirPath) return macTemporaryDirPath;
+
+  try {
+    const temporaryDirPath = childProcess.execFileSync(
+      "/usr/bin/getconf",
+      ["DARWIN_USER_TEMP_DIR"],
+      {
+        encoding: "utf8",
+        env: environment,
+        maxBuffer: 4 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1_000,
+      },
+    ).trim();
+
+    if (path.isAbsolute(temporaryDirPath) && !/[\0\r\n]/.test(temporaryDirPath)) {
+      macTemporaryDirPathsByUserId.set(userId, temporaryDirPath);
+
+      return temporaryDirPath;
+    }
+  } catch {
+    // Preserve the temporary-directory fallback when getconf is unavailable.
+  }
+
+  return environment.TMP || environment.TEMP || "/tmp";
 }
 
 function isRuntimeRegistryEntry(value: unknown): value is RuntimeRegistryEntry {
