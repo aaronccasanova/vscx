@@ -5,12 +5,14 @@ import type * as stream from "node:stream";
 import {
   createBridgeRequest,
   getBridgeErrorData,
+  getRuntimeRegistryDirPath,
   probeBridgeConnection,
   protocolVersion,
   parseBridgeRequest,
   pruneStaleRuntimeRegistryEntries,
   resolveBridgeTargets,
   sendBridgeRequest,
+  validateBridgeTargetSelector,
   vscxVersion,
   VscxError,
   type BridgeErrorData,
@@ -49,6 +51,15 @@ interface CommandContext {
   stderr: stream.Writable;
   stdin: stream.Readable;
   stdout: stream.Writable;
+}
+
+interface DoctorChecks {
+  selectedWindowIds: string[];
+  resolutionSources: ResolvedBridgeTarget["source"][];
+  healthyWindowCount: number;
+  registryEntryCount: number;
+  runtimeDirectory: string;
+  runtimeDirectoryExists: boolean;
 }
 
 interface WindowDescription {
@@ -118,7 +129,7 @@ export function parseCliArguments(args: string[]): ParsedCliArguments {
       continue;
     }
 
-    if (["--endpoint", "--window", "--workspace", "--timeout"].includes(argument)) {
+    if (["--endpoint", "--window", "--workspace", "--process", "--timeout"].includes(argument)) {
       const optionValue = args[argumentIndex + 1];
 
       if (!optionValue) throw new VscxError("missing-option", `${argument} requires a value.`);
@@ -128,6 +139,18 @@ export function parseCliArguments(args: string[]): ParsedCliArguments {
       if (argument === "--endpoint") selector.endpoint = optionValue;
       if (argument === "--window") selector.windowId = optionValue;
       if (argument === "--workspace") selector.workspace = optionValue;
+      if (argument === "--process") {
+        const processId = Number(optionValue);
+
+        if (!/^\d+$/.test(optionValue) || !Number.isSafeInteger(processId) || processId < 1) {
+          throw new VscxError(
+            "invalid-process",
+            "--process must be a positive safe integer written in decimal digits.",
+          );
+        }
+
+        selector.processId = processId;
+      }
       if (argument === "--timeout") {
         timeoutMs = Number(optionValue);
 
@@ -150,6 +173,8 @@ export function parseCliArguments(args: string[]): ParsedCliArguments {
 
     commandArguments.push(argument);
   }
+
+  validateBridgeTargetSelector(selector);
 
   return {
     commandArguments,
@@ -235,7 +260,11 @@ async function runWindowsCommand(commandContext: CommandContext): Promise<number
     currentDirPath: commandContext.currentDirPath,
     environment: commandContext.environment,
     selector: commandContext.arguments.selector,
-  }).catch(() => []);
+  }).catch((error) => {
+    if (commandContext.arguments.selector.processId !== undefined) throw error;
+
+    return [];
+  });
   const windowDescriptions = await Promise.all(
     runtimeRegistryEntries.map(async (runtimeRegistryEntry) => {
       const bridgeProbe = await probeBridgeConnection({
@@ -415,6 +444,9 @@ async function runApiCommand(commandContext: CommandContext): Promise<number> {
 }
 
 async function runDoctorCommand(commandContext: CommandContext): Promise<number> {
+  const runtimeDirPath = getRuntimeRegistryDirPath({
+    environment: commandContext.environment,
+  });
   const runtimeRegistryEntries = pruneStaleRuntimeRegistryEntries({
     environment: commandContext.environment,
   });
@@ -448,19 +480,20 @@ async function runDoctorCommand(commandContext: CommandContext): Promise<number>
   const healthyWindowCount = registryChecks.filter(
     (registryCheck) => registryCheck.endpointReachable,
   ).length;
+  const doctorChecks: DoctorChecks = {
+    selectedWindowIds: selectedTargets.map((target) => target.windowId ?? "explicit endpoint"),
+    resolutionSources: selectedTargets.map((target) => target.source),
+    healthyWindowCount,
+    registryEntryCount: runtimeRegistryEntries.length,
+    runtimeDirectory: runtimeDirPath,
+    runtimeDirectoryExists: fs.statSync(runtimeDirPath, { throwIfNoEntry: false })?.isDirectory() ?? false,
+  };
   const doctorResult = {
-    checks: {
-      selectedWindowIds: selectedTargets.map((target) => target.windowId ?? "explicit endpoint"),
-      resolutionSources: selectedTargets.map((target) => target.source),
-      healthyWindowCount,
-      registryEntryCount: runtimeRegistryEntries.length,
-      runtimeDirectory:
-        commandContext.environment.VSCX_RUNTIME_DIR ?? "platform default",
-    },
+    checks: doctorChecks,
     guidance: getDoctorGuidance(
       resolutionError,
       runtimeRegistryEntries,
-      healthyWindowCount,
+      doctorChecks,
     ),
     ok: selectedConnectionChecks.length > 0 && selectedConnectionChecks.every((check) => check.ok),
     ...(resolutionError ? { resolutionError } : {}),
@@ -474,6 +507,8 @@ async function runDoctorCommand(commandContext: CommandContext): Promise<number>
       `VSCX doctor: ${doctorResult.ok ? "ready" : "not ready"}`,
       `Window resolution: ${doctorResult.checks.resolutionSources.join(", ") || "unresolved"}`,
       `Selected windows: ${doctorResult.checks.selectedWindowIds.join(", ") || "none"}`,
+      `Runtime directory: ${doctorResult.checks.runtimeDirectory}`,
+      `Runtime directory exists: ${doctorResult.checks.runtimeDirectoryExists ? "yes" : "no"}`,
       `Registered windows: ${doctorResult.checks.registryEntryCount}`,
       `Healthy windows: ${doctorResult.checks.healthyWindowCount}`,
       ...doctorResult.guidance.map((guidanceLine) => `- ${guidanceLine}`),
@@ -569,18 +604,50 @@ function buildRpcCommandContext(
 
   const rpcSelector: BridgeTargetSelector = {};
 
-  if (requestValue.target === "all") rpcSelector.all = true;
-  if (typeof requestValue.target === "string" && requestValue.target !== "current") {
-    rpcSelector.windowId = requestValue.target;
-  }
-  if (isRecord(requestValue.target)) {
-    if (typeof requestValue.target.windowId === "string") {
-      rpcSelector.windowId = requestValue.target.windowId;
+  if (requestValue.target === "all") {
+    rpcSelector.all = true;
+  } else if (typeof requestValue.target === "string") {
+    if (requestValue.target.length === 0) {
+      throw new VscxError("invalid-target", "An RPC target must not be empty.");
     }
-    if (typeof requestValue.target.workspace === "string") {
-      rpcSelector.workspace = requestValue.target.workspace;
+
+    if (requestValue.target !== "current") rpcSelector.windowId = requestValue.target;
+  } else if (isRecord(requestValue.target)) {
+    const targetKeys = Object.keys(requestValue.target);
+
+    if (targetKeys.length === 0 || targetKeys.some((key) =>
+      !["processId", "windowId", "workspace"].includes(key),
+    )) {
+      throw new VscxError(
+        "invalid-target",
+        "An RPC target object must specify exactly one of processId, windowId, or workspace.",
+      );
     }
+
+    if ("processId" in requestValue.target) {
+      if (typeof requestValue.target.processId !== "number") {
+        throw new VscxError("invalid-process", "target.processId must be a positive safe integer.");
+      }
+
+      rpcSelector.processId = requestValue.target.processId;
+    }
+
+    for (const targetKey of ["windowId", "workspace"] as const) {
+      if (!(targetKey in requestValue.target)) continue;
+
+      const targetValue = requestValue.target[targetKey];
+
+      if (typeof targetValue !== "string" || targetValue.length === 0) {
+        throw new VscxError("invalid-target", `target.${targetKey} must be a nonempty string.`);
+      }
+
+      rpcSelector[targetKey] = targetValue;
+    }
+  } else {
+    throw new VscxError("invalid-target", "An RPC target must be a string or a target object.");
   }
+
+  validateBridgeTargetSelector(rpcSelector);
 
   return {
     ...commandContext,
@@ -771,17 +838,22 @@ function getRequestIdFromLine(requestLine: string): string {
 function getDoctorGuidance(
   resolutionError: BridgeErrorData | undefined,
   runtimeRegistryEntries: RuntimeRegistryEntry[],
-  healthyWindowCount: number,
+  doctorChecks: DoctorChecks,
 ): string[] {
   const guidance: string[] = [];
 
   if (resolutionError) guidance.push(resolutionError.message);
 
+  if (!doctorChecks.runtimeDirectoryExists) {
+    guidance.push(`The runtime registry directory is missing: ${doctorChecks.runtimeDirectory}.`);
+  }
+
   if (runtimeRegistryEntries.length === 0) {
     guidance.push(
       "No extension endpoint is registered. Install the local VSIX and run 'VSCX: Show bridge status'.",
+      "If VS Code is running, ensure VSCX_RUNTIME_DIR matches the registry directory used by the extension host.",
     );
-  } else if (healthyWindowCount === 0) {
+  } else if (doctorChecks.healthyWindowCount === 0) {
     guidance.push(
       "All registry entries are stale. Reload a VS Code window with VSCX enabled.",
     );
@@ -858,7 +930,8 @@ Commands:
 
 Target options:
   --window <id>        Select a registered window
-  --workspace <path>  Select the unique window containing a path
+  --workspace <path>   Select the unique window containing a path
+  --process <pid>      Select the window owning this process's terminal
   --endpoint <url>     Use an endpoint with VSCX_TOKEN from the environment
   --all                Explicitly fan out to all registered windows
 

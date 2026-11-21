@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { createBridgeRequest, sendBridgeRequest } from "./client.js";
@@ -5,6 +6,7 @@ import { VscxError } from "./errors.js";
 import { createProcessAncestryReader, type ProcessAncestry } from "./process-ancestry.js";
 import { isRecord, type BridgeConnection } from "./protocol.js";
 import {
+  getRuntimeRegistryDirPath,
   pruneStaleRuntimeRegistryEntries,
   type RuntimeRegistryEntry,
   type RuntimeRegistryOptions,
@@ -13,6 +15,7 @@ import {
 export interface BridgeTargetSelector {
   all?: boolean;
   endpoint?: string;
+  processId?: number;
   windowId?: string;
   workspace?: string;
 }
@@ -34,6 +37,12 @@ export interface ResolvedBridgeTarget extends BridgeConnection {
     | "workspace"
     | "single-window";
   registryEntry?: RuntimeRegistryEntry;
+}
+
+interface RegistryDiagnostics {
+  runtimeDirectory: string;
+  runtimeDirectoryExists: boolean;
+  processId?: number;
 }
 
 export async function resolveBridgeTargets(
@@ -74,7 +83,8 @@ export async function resolveBridgeTargets(
     if (!matchingEntry) {
       throw new VscxError(
         "window-not-found",
-        `No registered VS Code window has ID ${selector.windowId}.`,
+        `No registered VS Code window has ID ${selector.windowId} in ${getRuntimeRegistryDirPath(options)}. Check that the CLI and extension use the same VSCX_RUNTIME_DIR.`,
+        { ...getRegistryDiagnostics(options) },
       );
     }
 
@@ -83,7 +93,11 @@ export async function resolveBridgeTargets(
 
   if (selector.all) {
     if (runtimeRegistryEntries.length === 0) {
-      throw new VscxError("no-windows", "No VSCX windows are registered.");
+      throw new VscxError(
+        "no-windows",
+        `No VSCX windows are registered in ${getRuntimeRegistryDirPath(options)}. Check that the CLI and extension use the same VSCX_RUNTIME_DIR.`,
+        { ...getRegistryDiagnostics(options) },
+      );
     }
 
     return runtimeRegistryEntries.map(buildRegistryTarget);
@@ -95,7 +109,7 @@ export async function resolveBridgeTargets(
       selector.workspace,
     );
 
-    return getUniqueTargetOrThrow(workspaceTargets, selector.workspace);
+    return getUniqueTargetOrThrow(workspaceTargets, selector.workspace, getRegistryDiagnostics(options));
   }
 
   const terminalTargets = await getTerminalTargets(runtimeRegistryEntries, options);
@@ -109,7 +123,7 @@ export async function resolveBridgeTargets(
   );
 
   if (currentWorkspaceTargets.length > 0) {
-    return getUniqueTargetOrThrow(currentWorkspaceTargets, currentDirPath).map((target) => ({
+    return getUniqueTargetOrThrow(currentWorkspaceTargets, currentDirPath, getRegistryDiagnostics(options)).map((target) => ({
       ...target,
       source: "workspace",
     }));
@@ -122,14 +136,15 @@ export async function resolveBridgeTargets(
   if (runtimeRegistryEntries.length === 0) {
     throw new VscxError(
       "no-windows",
-      "No VSCX window is discoverable. Install or activate the extension in the intended VS Code window.",
+      `No VSCX window is discoverable in ${getRuntimeRegistryDirPath(options)}. Check that the CLI and extension use the same VSCX_RUNTIME_DIR, then install or activate the extension in the intended VS Code window.`,
+      { ...getRegistryDiagnostics(options) },
     );
   }
 
   throw new VscxError(
     "ambiguous-window",
     "Several VSCX windows are registered. Run 'vscx windows' and select one with --window.",
-    { windowIds: runtimeRegistryEntries.map((entry) => entry.windowId) },
+    { ...getRegistryDiagnostics(options), windowIds: runtimeRegistryEntries.map((entry) => entry.windowId) },
   );
 }
 
@@ -150,9 +165,17 @@ export function getEnvironmentTarget(
 }
 
 export function validateBridgeTargetSelector(selector: BridgeTargetSelector): void {
+  if (
+    selector.processId !== undefined &&
+    (!Number.isSafeInteger(selector.processId) || selector.processId < 1)
+  ) {
+    throw new VscxError("invalid-process", "--process must be a positive safe integer.");
+  }
+
   const selectedTargetCount = [
     selector.all,
     selector.endpoint,
+    selector.processId !== undefined,
     selector.windowId,
     selector.workspace,
   ].filter(Boolean).length;
@@ -161,7 +184,7 @@ export function validateBridgeTargetSelector(selector: BridgeTargetSelector): vo
 
   throw new VscxError(
     "incompatible-targets",
-    "Use only one of --all, --endpoint, --window, or --workspace.",
+    "Use only one of --all, --endpoint, --process, --window, or --workspace.",
   );
 }
 
@@ -170,7 +193,18 @@ async function getTerminalTargets(
   options: ResolveBridgeTargetsOptions,
 ): Promise<ResolvedBridgeTarget[]> {
   const getProcessAncestry = options.getProcessAncestry ?? createProcessAncestryReader();
-  const ancestorProcessIds = options.ancestorProcessIds ?? getProcessAncestry(process.pid).processIds;
+  const processId = options.selector?.processId;
+  const processAncestry = processId === undefined ? undefined : getProcessAncestry(processId);
+
+  if (processId !== undefined && processAncestry && !processAncestry.complete) {
+    throw new VscxError(
+      "terminal-ownership-unavailable",
+      `Cannot determine local ancestry for process ${processId}. Process targeting requires a live local process on macOS or Linux.`,
+      { ...getRegistryDiagnostics(options), processId },
+    );
+  }
+
+  const ancestorProcessIds = processAncestry?.processIds ?? options.ancestorProcessIds ?? getProcessAncestry(process.pid).processIds;
   const terminalOwners = await Promise.all(
     runtimeRegistryEntries.map(async (runtimeRegistryEntry) => {
       if (runtimeRegistryEntry.remoteAuthority || ancestorProcessIds.length === 0) {
@@ -240,10 +274,11 @@ async function getTerminalTargets(
     );
   });
 
-  if (ownershipIncomplete && (integratedTerminal || matchingTerminalOwners.length > 0)) {
+  if (ownershipIncomplete && (processId !== undefined || integratedTerminal || matchingTerminalOwners.length > 0)) {
     throw new VscxError(
       "terminal-ownership-unavailable",
-      "A VSCX window could not confirm terminal ownership and may own a closer terminal. Wait for activation or terminal startup, then retry, or select --window explicitly.",
+      `A VSCX window could not confirm terminal ownership${processId === undefined ? "" : ` for process ${processId}`} and may own a closer terminal. Wait for activation or terminal startup, then retry, or select --window explicitly.`,
+      { ...getRegistryDiagnostics(options), ...(processId === undefined ? {} : { processId }) },
     );
   }
 
@@ -255,19 +290,32 @@ async function getTerminalTargets(
     }));
 
   if (terminalTargets.length > 0) {
-    return getUniqueTargetOrThrow(terminalTargets, "the current terminal");
+    return getUniqueTargetOrThrow(
+      terminalTargets,
+      processId === undefined ? "the current terminal" : `process ${processId}`,
+      { ...getRegistryDiagnostics(options), ...(processId === undefined ? {} : { processId }) },
+    );
   }
 
   // Per-activation values in old terminals cannot establish current ownership.
   // In particular, a terminal can move while its original window remains live.
-  if (integratedTerminal) {
+  if (processId !== undefined || integratedTerminal) {
     throw new VscxError(
       "terminal-owner-not-found",
-      "The current integrated terminal's VSCX window is not ready or its ownership cannot be determined. Wait for VSCX to activate, or run 'vscx windows' and select --window explicitly.",
+      processId === undefined
+        ? "The current integrated terminal's VSCX window is not ready or its ownership cannot be determined. Wait for VSCX to activate, or run 'vscx windows' and select --window explicitly."
+        : `No registered local VSCX window owns process ${processId}. Wait for activation or terminal startup, or run 'vscx windows' and select --window explicitly.`,
+      { ...getRegistryDiagnostics(options), ...(processId === undefined ? {} : { processId }) },
     );
   }
 
   return [];
+}
+
+function getRegistryDiagnostics(options: RuntimeRegistryOptions): RegistryDiagnostics {
+  const runtimeDirPath = getRuntimeRegistryDirPath(options);
+
+  return { runtimeDirectory: runtimeDirPath, runtimeDirectoryExists: fs.existsSync(runtimeDirPath) };
 }
 
 function getWorkspaceTargets(
@@ -294,20 +342,22 @@ function getWorkspaceTargets(
 function getUniqueTargetOrThrow(
   targets: ResolvedBridgeTarget[],
   workspace: string,
+  registryDiagnostics: RegistryDiagnostics,
 ): ResolvedBridgeTarget[] {
   if (targets.length === 1) return targets;
 
   if (targets.length === 0) {
     throw new VscxError(
       "workspace-not-found",
-      `No registered VSCX window contains ${workspace}.`,
+      `No registered VSCX window contains ${workspace}. Searched ${registryDiagnostics.runtimeDirectory}. Check that the CLI and extension use the same VSCX_RUNTIME_DIR.`,
+      { ...registryDiagnostics },
     );
   }
 
   throw new VscxError(
     "ambiguous-window",
     `Several VSCX windows match ${workspace}. Select one with --window.`,
-    { windowIds: targets.map((target) => target.windowId ?? "unknown") },
+    { ...registryDiagnostics, windowIds: targets.map((target) => target.windowId ?? "unknown") },
   );
 }
 

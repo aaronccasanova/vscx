@@ -7,11 +7,13 @@ import * as nodeTest from "node:test";
 import {
   createBridgeServer,
   getAncestorProcessIds,
+  isRecord,
   protocolVersion,
   resolveBridgeTargets,
   VscxError,
   writeRuntimeRegistryEntry,
   type BridgeServer,
+  type BridgeTargetSelector,
   type JsonValue,
   type RuntimeRegistryEntry,
 } from "./index.js";
@@ -299,6 +301,162 @@ nodeTest.test("collects the caller's real process ancestry on supported local pl
   assert.equal(ancestorProcessIds[0], process.pid);
   assert.ok(ancestorProcessIds.includes(process.ppid));
   assert.ok(ancestorProcessIds.length <= 64);
+});
+
+nodeTest.test("explicit process selection uses the requested ancestry and nearest owner after reactivation", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "caller-window", [process.pid]);
+  await registerWindow(runtimeDirPath, "outer-window", [300]);
+  await registerWindow(runtimeDirPath, "new-owner-window", [200], { workspaceFolders: [] });
+
+  const targets = await resolveBridgeTargets({
+    ancestorProcessIds: [process.pid],
+    environment: { VSCX_WINDOW_ID: "old-owner-window" },
+    getProcessAncestry: (processId) => {
+      assert.equal(processId, 100);
+
+      return { complete: true, processIds: [100, 200, 300] };
+    },
+    runtimeDirPath,
+    selector: { processId: 100 },
+  });
+
+  assert.equal(targets[0]?.windowId, "new-owner-window");
+  assert.equal(targets[0]?.source, "terminal");
+});
+
+nodeTest.test("explicit process selection never falls back to workspace, sole window, or remote PID collisions", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "other-window", [800]);
+
+  for (const remoteWindow of [false, true]) {
+    if (remoteWindow) {
+      await registerWindow(runtimeDirPath, "remote-window", [200], { remoteAuthority: "ssh-remote+example" });
+    }
+
+    await assert.rejects(resolveBridgeTargets({
+      environment: {},
+      getProcessAncestry: () => ({ complete: true, processIds: [100, 200] }),
+      runtimeDirPath,
+      selector: { processId: 100 },
+    }), (error: unknown) => {
+      assert.ok(error instanceof VscxError);
+      assert.ok(isRecord(error.details));
+      assert.equal(error.code, "terminal-owner-not-found");
+      assert.equal(error.details.processId, 100);
+      assert.equal(error.details.runtimeDirectory, runtimeDirPath);
+
+      return true;
+    });
+  }
+});
+
+nodeTest.test("explicit process selection rejects missing or incomplete ancestry before trusting a reported PID", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "stale-owner", [100]);
+
+  for (const processIds of [[], [100], [100, 200]]) {
+    await assert.rejects(resolveBridgeTargets({
+      environment: {},
+      getProcessAncestry: () => ({ complete: false, processIds }),
+      runtimeDirPath,
+      selector: { processId: 100 },
+    }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
+  }
+});
+
+nodeTest.test("explicit process selection fails closed on unavailable probes even outside integrated terminals", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "unavailable-window", { complete: false, processIds: [] });
+
+  await assert.rejects(resolveBridgeTargets({
+    environment: {},
+    getProcessAncestry: () => ({ complete: true, processIds: [100, 200] }),
+    runtimeDirPath,
+    selector: { processId: 100 },
+  }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
+});
+
+nodeTest.test("explicit process selection cannot skip an unresolved closer owner", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "outer-window", [300]);
+  await registerWindow(runtimeDirPath, "unresolved-inner-window", { complete: false, processIds: [] });
+
+  await assert.rejects(resolveBridgeTargets({
+    environment: {},
+    getProcessAncestry: (processId) => ({
+      complete: true,
+      processIds: processId === 100 ? [100, 200, 300, 500] : [processId, 200, 300, 500],
+    }),
+    runtimeDirPath,
+    selector: { processId: 100 },
+  }), (error: unknown) => error instanceof VscxError && error.code === "terminal-ownership-unavailable");
+});
+
+nodeTest.test("explicit process selection rejects duplicate ownership and identifies the requested PID", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  await registerWindow(runtimeDirPath, "window-a", [100]);
+  await registerWindow(runtimeDirPath, "window-b", [100]);
+
+  await assert.rejects(resolveBridgeTargets({
+    environment: {},
+    getProcessAncestry: () => ({ complete: true, processIds: [100, 200] }),
+    runtimeDirPath,
+    selector: { processId: 100 },
+  }), (error: unknown) => {
+    assert.ok(error instanceof VscxError);
+    assert.ok(isRecord(error.details));
+    assert.equal(error.code, "ambiguous-window");
+    assert.equal(error.details.processId, 100);
+
+    return true;
+  });
+});
+
+nodeTest.test("validates process selectors before any registry access or target fallback", async () => {
+  for (const processId of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "100", null]) {
+    await assert.rejects(resolveBridgeTargets({
+      runtimeDirPath: "/does-not-exist/vscx-test",
+      selector: { processId } as BridgeTargetSelector,
+    }), (error: unknown) => error instanceof VscxError && error.code === "invalid-process");
+  }
+
+  for (const selector of [{ all: true }, { endpoint: "http://localhost" }, { windowId: "window-a" }, { workspace: "/example" }]) {
+    await assert.rejects(resolveBridgeTargets({
+      selector: { ...selector, processId: 100 },
+    }), (error: unknown) => error instanceof VscxError && error.code === "incompatible-targets");
+  }
+});
+
+nodeTest.test("empty and missing registry errors name the resolved directory and its existence", async () => {
+  const runtimeDirPath = createRuntimeDirPath();
+
+  for (const runtimeDirectory of [runtimeDirPath, path.join(runtimeDirPath, "missing")]) {
+    for (const selector of [{}, { all: true }, { windowId: "unknown-window" }, { workspace: "/missing-project" }]) {
+      await assert.rejects(resolveBridgeTargets({
+        ancestorProcessIds: [],
+        environment: {},
+        runtimeDirPath: runtimeDirectory,
+        selector,
+      }), (error: unknown) => {
+        assert.ok(error instanceof VscxError);
+        assert.ok(isRecord(error.details));
+        assert.equal(error.code, "windowId" in selector ? "window-not-found" : "workspace" in selector ? "workspace-not-found" : "no-windows");
+        assert.equal(error.details.runtimeDirectory, runtimeDirectory);
+        assert.equal(error.details.runtimeDirectoryExists, runtimeDirectory === runtimeDirPath);
+        assert.ok(error.message.includes(runtimeDirectory));
+        assert.match(error.message, /VSCX_RUNTIME_DIR/);
+
+        return true;
+      });
+    }
+  }
 });
 
 function createRuntimeDirPath(): string {
