@@ -164,6 +164,8 @@ On macOS and Linux, the CLI asks registered local windows for their live termina
 
 If an integrated terminal's owner cannot be confirmed, VSCX requires `--window` or `--workspace`. Without an ownership match, integrated terminals never fall back to a window selected by working directory or window count. Windows, remote terminals, and unavailable process information may require explicit selection. A registered unresolved nested window still blocks selection when it could own a closer terminal. External shells retain unique workspace and sole-window fallbacks. Ambiguous matches always require selection.
 
+`--process <pid>` selects the VS Code window that owns the integrated terminal associated with a live local process. The request runs in that window's extension host. VSCX reads the process's ancestry and matches the nearest registered local terminal owner, including after the extension host reactivates with a new window ID. The PID must be a positive safe integer and is exclusive with other selectors. No match, incomplete ancestry, ambiguous ownership, or a potentially closer unresolved owner fails without falling back to a workspace or sole window. This selector supports local macOS and Linux processes. Remote PIDs and unsupported platforms require a window or workspace selector. PIDs can be reused, so treat them as lookup keys, not persistent identifiers.
+
 Only registered windows participate in discovery. Before using automatic selection in a nested editor instance, wait until that instance appears in `vscx windows`. Until then, a registered outer terminal can still match.
 
 Terminals created before this update may need one recreation to receive the stable `PATH`. After that, reloads and restarts preserve CLI access without persisting credentials. If you run incompatible extension development builds, use separate VS Code user data directories: builds sharing extension storage share the last copied CLI.
@@ -171,9 +173,16 @@ Terminals created before this update may need one recreation to receive the stab
 ```sh
 vscx windows
 vscx --window <window-id> info
+vscx --process <terminal-shell-pid> info
 vscx --workspace "$PWD" info
 vscx --all eval --code 'return vscode.env.appName' --json
 ```
+
+### Registry diagnostics
+
+`vscx doctor` reports the resolved runtime registry directory and whether it exists in both text and JSON output. Discovery errors include `details.runtimeDirectory` and `details.runtimeDirectoryExists`. If a CLI outside VS Code cannot discover a window, compare that path with the extension's `registryDirPath` from `vscx info --json` in a connected terminal. Both processes must use the same `VSCX_RUNTIME_DIR` when you override it.
+
+Registry resolution honors an explicit core `runtimeDirPath`, then `VSCX_RUNTIME_DIR`, Windows `LOCALAPPDATA`, and `XDG_RUNTIME_DIR`. Otherwise it uses a per-user directory under the temporary directory. On macOS, a nonempty `TMPDIR` stays authoritative. If it is missing or empty, VSCX asks `/usr/bin/getconf DARWIN_USER_TEMP_DIR` for the user's system temporary directory before falling back to the normal temporary-directory defaults. This lets cleared environments discover the default registry without moving existing registries.
 
 ## Evaluation and jobs
 

@@ -43,8 +43,11 @@ VSCX refuses to guess when several windows match. Inspect and select one:
 ```sh
 vscx windows
 vscx --window <window-id> info
+vscx --process <terminal-shell-pid> info
 vscx --workspace /absolute/project/path info
 ```
+
+`--process <pid>` selects the VS Code window that owns the integrated terminal associated with a live local process. The request runs in that window's extension host. On macOS and Linux, VSCX matches the nearest registered local terminal owner in the requested process's ancestry, independent of the caller's stale environment or working directory. The PID must be a positive safe integer in decimal form. No match, unavailable ancestry, or uncertain ownership fails without choosing another window. PIDs can be reused, so treat them as lookup keys, not persistent identifiers. Remote PIDs and unsupported platforms need `--window` or `--workspace`.
 
 Use `--all` only when fan-out to every registered window is explicitly intended. Each response includes its `windowId`, and one failed window makes the command fail without discarding other responses.
 
@@ -66,7 +69,7 @@ Shared options:
 
 - `--json` emits machine-readable output.
 - `--timeout <ms>` sets a timeout from 1 to 300000 milliseconds.
-- `--window`, `--workspace`, `--endpoint`, and `--all` select a target.
+- `--window`, `--workspace`, `--process`, `--endpoint`, and `--all` select a target. Use only one.
 
 Without `--json`, a successful single request prints its value directly. With `--json`, it prints the complete response envelope. Inspect `ok` before consuming `value`. Parse or usage failures exit with a nonzero status.
 
@@ -93,14 +96,14 @@ printf '%s\n' \
   | vscx rpc
 ```
 
-Input is one JSON object per line. Output is one response envelope per line. Supported `target` values are `"current"`, `"all"`, a window ID string, or an object with `windowId` or `workspace`. A request can supply `code`, `input`, `jobId`, `query`, and `timeoutMs` as appropriate for its operation.
+Input is one JSON object per line. Output is one response envelope per line. Supported `target` values are `"current"`, `"all"`, a window ID string, or an object with exactly one of `windowId`, `workspace`, or numeric `processId`, for example `{"op":"info","target":{"processId":12345}}`. Invalid or mixed selectors fail without falling back to the current window. A request can supply `code`, `input`, `jobId`, `query`, and `timeoutMs` as appropriate for its operation.
 
 Prefer `rpc` for a long-lived machine protocol. Prefer direct commands for interactive work and isolated actions.
 
 ## Recover from connection problems
 
 - `vscx: command not found`: A terminal predating the stable CLI contribution needs one recreation after VSCX activates, or `VSCX: Open connected terminal`.
-- No registered windows: Confirm the VSCX extension is installed and active, then reload the VS Code window.
+- No registered windows: Inspect the resolved registry directory and existence in `vscx doctor` (JSON: `checks.runtimeDirectory` and `checks.runtimeDirectoryExists`). Compare it with the extension's `registryDirPath` from a connected terminal. Match any explicit `VSCX_RUNTIME_DIR` override before checking extension installation or activation. On macOS, missing or empty `TMPDIR` uses the system per-user temporary directory when available.
 - A stale window: Reload or close the corresponding window. Records are removed automatically after their extension-host process exits.
 - Unresolved terminal ownership: Wait for activation or terminal startup and retry. If it persists, inspect `vscx windows` and select `--window` explicitly.
 - An ambiguous window: Select an exact `--window` or `--workspace` target.
