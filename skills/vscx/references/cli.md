@@ -47,7 +47,7 @@ vscx --process <terminal-shell-pid> info
 vscx --workspace /absolute/project/path info
 ```
 
-`--process <pid>` selects the nearest registered local terminal owner of that PID on macOS or Linux. It uses the requested process, independent of the caller's stale environment or working directory. The PID must be a positive safe integer in decimal form. No match, unavailable ancestry, or uncertain ownership fails without choosing another window. A shell PID can survive an extension host restart but not full process revival, and PIDs can be reused. Retain session/generation checks when routing worker operations. Remote PIDs and unsupported platforms need `--window` or `--workspace`.
+`--process <pid>` selects the VS Code window that owns the integrated terminal associated with a live local process. The request runs in that window's extension host. On macOS and Linux, VSCX matches the nearest registered local terminal owner in the requested process's ancestry, independent of the caller's stale environment or working directory. The PID must be a positive safe integer in decimal form. No match, unavailable ancestry, or uncertain ownership fails without choosing another window. PIDs can be reused, so treat them as lookup keys, not persistent identifiers. Remote PIDs and unsupported platforms need `--window` or `--workspace`.
 
 Use `--all` only when fan-out to every registered window is explicitly intended. Each response includes its `windowId`, and one failed window makes the command fail without discarding other responses.
 
